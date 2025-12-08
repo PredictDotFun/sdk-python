@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal
@@ -9,7 +10,6 @@ from typing import Any, Literal
 from web3.types import TxReceipt
 
 from predict_sdk.constants import Side, SignatureType
-
 
 # Type aliases
 Address = str
@@ -239,5 +239,5 @@ class OrderBuilderOptions:
 
     precision: int = 18
     predict_account: Address | None = None
-    generate_salt: Any | None = None  # Callable[[], str] | None
+    generate_salt: Callable[[], str] | None = None
     log_level: LogLevel = "INFO"

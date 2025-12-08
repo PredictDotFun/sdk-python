@@ -17,17 +17,17 @@ class MissingSignerError(PredictSDKError):
 
 
 class InvalidQuantityError(PredictSDKError):
-    """Raised when the quantity is invalid."""
+    """Raised when the quantity or price is invalid."""
 
-    def __init__(self) -> None:
-        super().__init__("Invalid quantityWei. Must be greater than 1e16.")
+    def __init__(self, message: str | None = None) -> None:
+        super().__init__(message or "Invalid quantityWei. Must be greater than 1e16.")
 
 
 class InvalidExpirationError(PredictSDKError):
     """Raised when the expiration is invalid."""
 
     def __init__(self) -> None:
-        super().__init__("Invalid expiration. Must be greater than 0.")
+        super().__init__("Invalid expiration. Must be in the future.")
 
 
 class FailedOrderSignError(PredictSDKError):

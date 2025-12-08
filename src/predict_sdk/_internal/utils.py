@@ -5,7 +5,7 @@ from __future__ import annotations
 import random
 from typing import Any
 
-from eth_abi import encode
+from eth_abi import encode  # type: ignore[attr-defined]
 from web3 import Web3
 
 from predict_sdk.constants import MAX_SALT
@@ -50,10 +50,10 @@ def retain_significant_digits(num: int, significant_digits: int) -> int:
     if excess <= 0:
         return num  # Return original number if no truncation is needed
 
-    divisor = 10**excess
+    divisor: int = 10**excess
 
     # Divide then multiply to truncate, and restore the sign
-    result = (abs_num // divisor) * divisor
+    result: int = (abs_num // divisor) * divisor
     return -result if is_negative else result
 
 
@@ -71,7 +71,11 @@ def hash_kernel_message(message_hash: str) -> str:
     kernel_type_hash = Web3.keccak(text="Kernel(bytes32 hash)")
 
     # Convert message_hash from hex string to bytes
-    message_hash_bytes = bytes.fromhex(message_hash[2:]) if message_hash.startswith("0x") else bytes.fromhex(message_hash)
+    message_hash_bytes = (
+        bytes.fromhex(message_hash[2:])
+        if message_hash.startswith("0x")
+        else bytes.fromhex(message_hash)
+    )
 
     # Encode [bytes32, bytes32]
     encoded = encode(["bytes32", "bytes32"], [kernel_type_hash, message_hash_bytes])
@@ -99,7 +103,11 @@ def eip712_wrap_hash(message_hash: str, domain: dict[str, Any]) -> str:
     final_message_hash = hash_kernel_message(message_hash)
 
     # Convert to bytes
-    final_hash_bytes = bytes.fromhex(final_message_hash[2:]) if final_message_hash.startswith("0x") else bytes.fromhex(final_message_hash)
+    final_hash_bytes = (
+        bytes.fromhex(final_message_hash[2:])
+        if final_message_hash.startswith("0x")
+        else bytes.fromhex(final_message_hash)
+    )
 
     # Concatenate: 0x1901 + domainSeparator + messageHash
     data = b"\x19\x01" + domain_separator + final_hash_bytes
@@ -118,7 +126,9 @@ def _hash_eip712_domain(domain: dict[str, Any]) -> bytes:
         The domain separator as bytes.
     """
     # EIP-712 Domain Type Hash
-    domain_type = "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+    domain_type = (
+        "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+    )
     domain_type_hash = Web3.keccak(text=domain_type)
 
     # Hash the name and version strings

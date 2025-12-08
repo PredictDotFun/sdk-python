@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 _ABI_DIR = Path(__file__).parent
 
@@ -12,7 +12,7 @@ _ABI_DIR = Path(__file__).parent
 def _load_abi(filename: str) -> list[dict[str, Any]]:
     """Load an ABI from a JSON file."""
     with open(_ABI_DIR / filename) as f:
-        return json.load(f)
+        return cast(list[dict[str, Any]], json.load(f))
 
 
 # Load all ABIs

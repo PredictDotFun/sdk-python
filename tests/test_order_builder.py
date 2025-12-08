@@ -12,7 +12,6 @@ from predict_sdk import (
     InvalidExpirationError,
     InvalidQuantityError,
     LimitHelperInput,
-    MakerSignerMismatchError,
     MissingSignerError,
     OrderBuilder,
     Side,
@@ -42,9 +41,9 @@ class TestOrderBuilderMake:
 class TestBuildOrder:
     """Test order building functionality."""
 
-    def test_build_limit_order(self, builder: OrderBuilder):
+    def test_build_limit_order(self, builder_with_signer: OrderBuilder):
         """Build a limit order."""
-        order = builder.build_order(
+        order = builder_with_signer.build_order(
             "LIMIT",
             BuildOrderInput(
                 side=Side.BUY,
@@ -62,9 +61,9 @@ class TestBuildOrder:
         assert order.fee_rate_bps == "100"
         assert order.signature_type == SignatureType.EOA
 
-    def test_build_market_order(self, builder: OrderBuilder):
+    def test_build_market_order(self, builder_with_signer: OrderBuilder):
         """Build a market order."""
-        order = builder.build_order(
+        order = builder_with_signer.build_order(
             "MARKET",
             BuildOrderInput(
                 side=Side.SELL,
@@ -78,9 +77,9 @@ class TestBuildOrder:
         assert order.side == Side.SELL
         assert order.token_id == "67890"
 
-    def test_build_order_with_custom_salt(self, builder: OrderBuilder):
+    def test_build_order_with_custom_salt(self, builder_with_signer: OrderBuilder):
         """Build order with custom salt."""
-        order = builder.build_order(
+        order = builder_with_signer.build_order(
             "LIMIT",
             BuildOrderInput(
                 side=Side.BUY,
@@ -94,10 +93,10 @@ class TestBuildOrder:
 
         assert order.salt == "123456789"
 
-    def test_build_order_with_expiration(self, builder: OrderBuilder):
+    def test_build_order_with_expiration(self, builder_with_signer: OrderBuilder):
         """Build order with custom expiration."""
         future_date = datetime(2100, 1, 1, tzinfo=timezone.utc)
-        order = builder.build_order(
+        order = builder_with_signer.build_order(
             "LIMIT",
             BuildOrderInput(
                 side=Side.BUY,
@@ -111,11 +110,11 @@ class TestBuildOrder:
 
         assert order.expiration == str(int(future_date.timestamp()))
 
-    def test_build_order_past_expiration_raises(self, builder: OrderBuilder):
+    def test_build_order_past_expiration_raises(self, builder_with_signer: OrderBuilder):
         """Building a LIMIT order with past expiration should raise."""
         past_date = datetime(2000, 1, 1, tzinfo=timezone.utc)
         with pytest.raises(InvalidExpirationError):
-            builder.build_order(
+            builder_with_signer.build_order(
                 "LIMIT",
                 BuildOrderInput(
                     side=Side.BUY,
@@ -124,6 +123,20 @@ class TestBuildOrder:
                     taker_amount="2000000000000000000",
                     fee_rate_bps=100,
                     expires_at=past_date,
+                ),
+            )
+
+    def test_build_order_without_signer_raises(self, builder: OrderBuilder):
+        """Building an order without signer should raise MissingSignerError."""
+        with pytest.raises(MissingSignerError):
+            builder.build_order(
+                "LIMIT",
+                BuildOrderInput(
+                    side=Side.BUY,
+                    token_id="12345",
+                    maker_amount="1000000000000000000",
+                    taker_amount="2000000000000000000",
+                    fee_rate_bps=100,
                 ),
             )
 
@@ -195,9 +208,9 @@ class TestLimitOrderAmounts:
 class TestTypedData:
     """Test EIP-712 typed data generation."""
 
-    def test_build_typed_data(self, builder: OrderBuilder):
+    def test_build_typed_data(self, builder_with_signer: OrderBuilder):
         """Build typed data for an order."""
-        order = builder.build_order(
+        order = builder_with_signer.build_order(
             "LIMIT",
             BuildOrderInput(
                 side=Side.BUY,
@@ -208,7 +221,7 @@ class TestTypedData:
             ),
         )
 
-        typed_data = builder.build_typed_data(
+        typed_data = builder_with_signer.build_typed_data(
             order,
             is_neg_risk=False,
             is_yield_bearing=False,
@@ -221,9 +234,9 @@ class TestTypedData:
         assert "Order" in typed_data.types
         assert "EIP712Domain" in typed_data.types
 
-    def test_build_typed_data_neg_risk(self, builder: OrderBuilder):
+    def test_build_typed_data_neg_risk(self, builder_with_signer: OrderBuilder):
         """Build typed data for a NegRisk order."""
-        order = builder.build_order(
+        order = builder_with_signer.build_order(
             "LIMIT",
             BuildOrderInput(
                 side=Side.BUY,
@@ -234,7 +247,7 @@ class TestTypedData:
             ),
         )
 
-        typed_data = builder.build_typed_data(
+        typed_data = builder_with_signer.build_typed_data(
             order,
             is_neg_risk=True,
             is_yield_bearing=False,
@@ -247,9 +260,12 @@ class TestTypedData:
 class TestSignature:
     """Test order signing functionality."""
 
-    def test_sign_without_signer_raises(self, builder: OrderBuilder):
+    def test_sign_without_signer_raises(
+        self, builder_with_signer: OrderBuilder, builder: OrderBuilder
+    ):
         """Signing without a signer should raise MissingSignerError."""
-        order = builder.build_order(
+        # Build an order with a signer first (valid)
+        order = builder_with_signer.build_order(
             "LIMIT",
             BuildOrderInput(
                 side=Side.BUY,
@@ -260,12 +276,13 @@ class TestSignature:
             ),
         )
 
-        typed_data = builder.build_typed_data(
+        typed_data = builder_with_signer.build_typed_data(
             order,
             is_neg_risk=False,
             is_yield_bearing=False,
         )
 
+        # Try to sign with a builder that has no signer
         with pytest.raises(MissingSignerError):
             builder.sign_typed_data_order(typed_data)
 

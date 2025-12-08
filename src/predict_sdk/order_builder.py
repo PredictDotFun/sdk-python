@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import asdict
+from collections.abc import Callable, Coroutine
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Callable, Literal, overload
+from typing import TYPE_CHECKING, Any, Literal, TypeVar, overload
 
 from eth_account import Account
 from eth_account.messages import encode_typed_data
 from eth_account.signers.local import LocalAccount
-from web3 import AsyncWeb3, Web3
+from web3 import Web3
 
 from predict_sdk._internal.contracts import (
     Contracts,
@@ -21,7 +21,6 @@ from predict_sdk._internal.contracts import (
     make_contracts,
 )
 from predict_sdk._internal.utils import (
-    compute_order_hash,
     eip712_wrap_hash,
     generate_order_salt,
     retain_significant_digits,
@@ -47,7 +46,6 @@ from predict_sdk.errors import (
     FailedOrderSignError,
     FailedTypedDataEncoderError,
     InvalidExpirationError,
-    InvalidNegRiskConfig,
     InvalidQuantityError,
     InvalidSignerError,
     MakerSignerMismatchError,
@@ -76,6 +74,8 @@ from predict_sdk.types import (
 
 if TYPE_CHECKING:
     from web3.contract import Contract
+
+_T = TypeVar("_T")
 
 
 class OrderBuilder:
@@ -115,7 +115,7 @@ class OrderBuilder:
         chain_id: ChainId,
         signer: None = None,
         options: OrderBuilderOptions | None = None,
-    ) -> "OrderBuilder": ...
+    ) -> OrderBuilder: ...
 
     @overload
     @classmethod
@@ -124,7 +124,7 @@ class OrderBuilder:
         chain_id: ChainId,
         signer: LocalAccount | str,
         options: OrderBuilderOptions | None = None,
-    ) -> "OrderBuilder": ...
+    ) -> OrderBuilder: ...
 
     @classmethod
     def make(
@@ -132,7 +132,7 @@ class OrderBuilder:
         chain_id: ChainId,
         signer: LocalAccount | str | None = None,
         options: OrderBuilderOptions | None = None,
-    ) -> "OrderBuilder":
+    ) -> OrderBuilder:
         """
         Factory method to create an OrderBuilder instance.
 
@@ -210,8 +210,10 @@ class OrderBuilder:
             OrderAmounts with price_per_share, maker_amount, and taker_amount.
 
         Raises:
-            InvalidQuantityError: If quantity_wei is less than 1e16.
+            InvalidQuantityError: If quantity_wei is less than 1e16 or price is invalid.
         """
+        if data.price_per_share_wei <= 0:
+            raise InvalidQuantityError("Invalid pricePerShareWei. Must be greater than 0.")
         if data.quantity_wei < int(1e16):
             raise InvalidQuantityError()
 
@@ -220,7 +222,9 @@ class OrderBuilder:
         qty = retain_significant_digits(data.quantity_wei, 5)
 
         if price != data.price_per_share_wei:
-            self._logger.debug("getLimitOrderAmounts truncated pricePerShareWei to 3 significant digits")
+            self._logger.debug(
+                "getLimitOrderAmounts truncated pricePerShareWei to 3 significant digits"
+            )
         if qty != data.quantity_wei:
             self._logger.debug("getLimitOrderAmounts truncated quantityWei to 5 significant digits")
 
@@ -283,7 +287,9 @@ class OrderBuilder:
         qty = retain_significant_digits(data.quantity_wei, 5)
 
         if qty != data.quantity_wei:
-            self._logger.debug("getMarketOrderAmountsByQuantity truncated quantityWei to 5 significant digits")
+            self._logger.debug(
+                "getMarketOrderAmountsByQuantity truncated quantityWei to 5 significant digits"
+            )
 
         if qty < int(1e16):
             raise InvalidQuantityError()
@@ -292,7 +298,9 @@ class OrderBuilder:
             processed = self._process_book(book.asks, qty)
             return OrderAmounts(
                 last_price=processed.last_price_wei,
-                price_per_share=(processed.price_wei * self._precision) // processed.quantity_wei if processed.quantity_wei > 0 else 0,
+                price_per_share=(processed.price_wei * self._precision) // processed.quantity_wei
+                if processed.quantity_wei > 0
+                else 0,
                 maker_amount=(processed.last_price_wei * processed.quantity_wei) // self._precision,
                 taker_amount=processed.quantity_wei,
             )
@@ -300,7 +308,9 @@ class OrderBuilder:
             processed = self._process_book(book.bids, qty)
             return OrderAmounts(
                 last_price=processed.last_price_wei,
-                price_per_share=(processed.price_wei * self._precision) // processed.quantity_wei if processed.quantity_wei > 0 else 0,
+                price_per_share=(processed.price_wei * self._precision) // processed.quantity_wei
+                if processed.quantity_wei > 0
+                else 0,
                 maker_amount=processed.quantity_wei,
                 taker_amount=(processed.last_price_wei * processed.quantity_wei) // self._precision,
             )
@@ -338,7 +348,9 @@ class OrderBuilder:
                 total_price += (price_wei * qty_wei) // self._precision
             else:
                 # Consume as much as we can
-                fractional_share_amount = (remaining_spend * self._precision) // price_wei if price_wei > 0 else 0
+                fractional_share_amount = (
+                    (remaining_spend * self._precision) // price_wei if price_wei > 0 else 0
+                )
                 number_of_shares += fractional_share_amount
                 total_price += (price_wei * fractional_share_amount) // self._precision
 
@@ -419,13 +431,21 @@ class OrderBuilder:
 
         signer_address = data.signer or (self._signer.address if self._signer else None)
 
-        if data.maker and signer_address != data.maker:
+        # Only validate maker/signer match when NOT using a predict_account
+        # (when using predict_account, maker/signer from data are ignored)
+        if not self._predict_account and data.maker and signer_address != data.maker:
             raise MakerSignerMismatchError()
+
+        # Validate we have a valid signer/maker address
+        effective_maker = self._predict_account or data.maker or signer_address
+        effective_signer = self._predict_account or signer_address
+        if not effective_maker or not effective_signer:
+            raise MissingSignerError()
 
         return Order(
             salt=str(data.salt or self._generate_salt()),
-            maker=self._predict_account or data.maker or signer_address or "",
-            signer=self._predict_account or signer_address or "",
+            maker=effective_maker,
+            signer=effective_signer,
             taker=data.taker or ZERO_ADDRESS,
             token_id=str(data.token_id),
             maker_amount=str(data.maker_amount),
@@ -639,8 +659,11 @@ class OrderBuilder:
         )
 
         # Sign the digest
-        message_bytes = bytes.fromhex(digest[2:]) if digest.startswith("0x") else bytes.fromhex(digest)
+        message_bytes = (
+            bytes.fromhex(digest[2:]) if digest.startswith("0x") else bytes.fromhex(digest)
+        )
         from eth_account.messages import encode_defunct
+
         msg = encode_defunct(primitive=message_bytes)
         signed = self._signer.sign_message(msg)
 
@@ -667,16 +690,18 @@ class OrderBuilder:
             gas_limit = (estimated_gas * 125) // 100
 
             # Build transaction
-            tx = method.build_transaction({
-                "from": self._signer.address,
-                "nonce": self._web3.eth.get_transaction_count(self._signer.address),
-                "gas": gas_limit,
-            })
+            tx = method.build_transaction(
+                {
+                    "from": self._signer.address,
+                    "nonce": self._web3.eth.get_transaction_count(self._signer.address, "pending"),
+                    "gas": gas_limit,
+                }
+            )
 
             # Sign and send
             signed = self._signer.sign_transaction(tx)
             tx_hash = self._web3.eth.send_raw_transaction(signed.raw_transaction)
-            receipt = self._web3.eth.wait_for_transaction_receipt(tx_hash)
+            receipt = self._web3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
 
             if receipt["status"] == 1:
                 return TransactionSuccess(success=True, receipt=receipt)
@@ -686,14 +711,18 @@ class OrderBuilder:
 
     # --- Sync Wrappers ---
 
-    def _run_async(self, coro: Any) -> Any:
+    def _run_async(self, coro: Coroutine[Any, Any, _T]) -> _T:
         """Run an async coroutine synchronously."""
         try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        return loop.run_until_complete(coro)
+            asyncio.get_running_loop()
+            raise RuntimeError(
+                "Cannot call sync method from within an async context. "
+                "Use the async variant (e.g., method_async) instead."
+            )
+        except RuntimeError as e:
+            if "no running event loop" not in str(e):
+                raise
+        return asyncio.run(coro)
 
     # --- Approval Methods ---
 
@@ -843,15 +872,33 @@ class OrderBuilder:
         results: list[TransactionResult] = []
 
         # Standard CTF Exchange
-        results.append(await self.set_ctf_exchange_approval_async(is_neg_risk=False, is_yield_bearing=is_yield_bearing))
-        results.append(await self.set_ctf_exchange_allowance_async(is_neg_risk=False, is_yield_bearing=is_yield_bearing))
+        results.append(
+            await self.set_ctf_exchange_approval_async(
+                is_neg_risk=False, is_yield_bearing=is_yield_bearing
+            )
+        )
+        results.append(
+            await self.set_ctf_exchange_allowance_async(
+                is_neg_risk=False, is_yield_bearing=is_yield_bearing
+            )
+        )
 
         # NegRisk CTF Exchange
-        results.append(await self.set_ctf_exchange_approval_async(is_neg_risk=True, is_yield_bearing=is_yield_bearing))
-        results.append(await self.set_ctf_exchange_allowance_async(is_neg_risk=True, is_yield_bearing=is_yield_bearing))
+        results.append(
+            await self.set_ctf_exchange_approval_async(
+                is_neg_risk=True, is_yield_bearing=is_yield_bearing
+            )
+        )
+        results.append(
+            await self.set_ctf_exchange_allowance_async(
+                is_neg_risk=True, is_yield_bearing=is_yield_bearing
+            )
+        )
 
         # NegRisk Adapter
-        results.append(await self.set_neg_risk_adapter_approval_async(is_yield_bearing=is_yield_bearing))
+        results.append(
+            await self.set_neg_risk_adapter_approval_async(is_yield_bearing=is_yield_bearing)
+        )
 
         success = all(r.success for r in results)
         return SetApprovalsResult(success=success, transactions=results)
@@ -884,11 +931,14 @@ class OrderBuilder:
         if not self._contracts:
             raise MissingSignerError()
 
-        check_address = address or self._predict_account or (self._signer.address if self._signer else None)
+        check_address = (
+            address or self._predict_account or (self._signer.address if self._signer else None)
+        )
         if not check_address:
             raise MissingSignerError()
 
-        return self._contracts.usdt.functions.balanceOf(check_address).call()
+        result: int = self._contracts.usdt.functions.balanceOf(check_address).call()
+        return result
 
     def balance_of(
         self,
@@ -1029,21 +1079,25 @@ class OrderBuilder:
         # Convert orders to the contract format
         order_structs = []
         for order in orders:
-            order_structs.append((
-                int(order.salt),
-                order.maker,
-                order.signer,
-                order.taker,
-                int(order.token_id),
-                int(order.maker_amount),
-                int(order.taker_amount),
-                int(order.expiration),
-                int(order.nonce),
-                int(order.fee_rate_bps),
-                order.side,
-                order.signature_type,
-                b"",  # Empty signature for cancellation
-            ))
+            order_structs.append(
+                (
+                    int(order.salt),
+                    order.maker,
+                    order.signer,
+                    order.taker,
+                    int(order.token_id),
+                    int(order.maker_amount),
+                    int(order.taker_amount),
+                    int(order.expiration),
+                    int(order.nonce),
+                    int(order.fee_rate_bps),
+                    order.side.value if hasattr(order.side, "value") else int(order.side),
+                    order.signature_type.value
+                    if hasattr(order.signature_type, "value")
+                    else int(order.signature_type),
+                    b"",  # Empty signature for cancellation
+                )
+            )
 
         return await self._handle_transaction_async(
             exchange_contract,

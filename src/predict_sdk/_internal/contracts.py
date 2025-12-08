@@ -120,9 +120,7 @@ def make_contracts(
             YIELD_BEARING_CONDITIONAL_TOKENS_ABI,
         ),
         # Adapter contracts
-        neg_risk_adapter=make_contract(
-            web3, addresses.NEG_RISK_ADAPTER, NEG_RISK_ADAPTER_ABI
-        ),
+        neg_risk_adapter=make_contract(web3, addresses.NEG_RISK_ADAPTER, NEG_RISK_ADAPTER_ABI),
         yield_bearing_neg_risk_adapter=make_contract(
             web3, addresses.YIELD_BEARING_NEG_RISK_ADAPTER, NEG_RISK_ADAPTER_ABI
         ),

@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from enum import IntEnum
 from typing import Final
 
-
 MAX_SALT: Final[int] = 2_147_483_648
 FIVE_MINUTES_SECONDS: Final[int] = 60 * 5
 
