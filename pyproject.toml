@@ -1,0 +1,79 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "predict_sdk"
+version = "0.0.1"
+description = "A Python SDK to help developers interface with the Predict.fun protocol"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+
+dependencies = [
+    "web3>=6.0.0,<8.0.0",
+    "eth-account>=0.11.0",
+    "eth-abi>=5.0.0",
+    "eth-typing>=4.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
+    "hypothesis>=6.0.0",
+    "mypy>=1.0.0",
+    "ruff>=0.1.0",
+]
+
+[project.urls]
+Homepage = "https://predict.fun/"
+Documentation = "https://dev.predict.fun/"
+Repository = "https://github.com/PredictDotFun/sdk-python"
+Issues = "https://github.com/PredictDotFun/sdk-python/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/predict_sdk"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/tests",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-v"
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_return_any = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = ["web3.*", "eth_account.*", "eth_abi.*", "eth_typing.*"]
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # Pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+]
+ignore = ["E501"]  # line length handled by formatter
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
