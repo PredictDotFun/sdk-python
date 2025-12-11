@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from predict_sdk._internal.utils import generate_order_salt, retain_significant_digits
+from predict_sdk._internal.utils import (
+    compute_order_hash,
+    eip712_wrap_hash,
+    generate_order_salt,
+    hash_kernel_message,
+    retain_significant_digits,
+)
 from predict_sdk.constants import MAX_SALT
 
 
@@ -62,3 +68,85 @@ class TestGenerateOrderSalt:
         salts = [generate_order_salt() for _ in range(10)]
         # At least some should be different
         assert len(set(salts)) > 1
+
+
+class TestHashKernelMessage:
+    """Test hash_kernel_message function."""
+
+    def test_returns_hash_with_0x_prefix(self):
+        """hash_kernel_message should return hash with 0x prefix."""
+        # Use a sample hash (with 0x prefix)
+        message_hash = "0x" + "a" * 64
+        result = hash_kernel_message(message_hash)
+
+        assert result.startswith("0x"), f"Hash should start with '0x', got: {result}"
+        assert len(result) == 66, f"Hash should be 66 chars, got: {len(result)}"
+        assert all(c in "0123456789abcdef" for c in result[2:])
+
+    def test_handles_hash_without_0x_prefix(self):
+        """hash_kernel_message should handle hash without 0x prefix."""
+        # Use a sample hash (without 0x prefix)
+        message_hash = "a" * 64
+        result = hash_kernel_message(message_hash)
+
+        assert result.startswith("0x"), f"Hash should start with '0x', got: {result}"
+        assert len(result) == 66
+
+
+class TestEip712WrapHash:
+    """Test eip712_wrap_hash function."""
+
+    def test_returns_hash_with_0x_prefix(self):
+        """eip712_wrap_hash should return hash with 0x prefix."""
+        message_hash = "0x" + "b" * 64
+        domain = {
+            "name": "TestDomain",
+            "version": "1",
+            "chainId": 56,
+            "verifyingContract": "0x" + "c" * 40,
+        }
+
+        result = eip712_wrap_hash(message_hash, domain)
+
+        assert result.startswith("0x"), f"Hash should start with '0x', got: {result}"
+        assert len(result) == 66, f"Hash should be 66 chars, got: {len(result)}"
+        assert all(c in "0123456789abcdef" for c in result[2:])
+
+
+class TestComputeOrderHash:
+    """Test compute_order_hash function."""
+
+    def test_returns_hash_with_0x_prefix(self):
+        """compute_order_hash should return hash with 0x prefix."""
+        # Create a minimal valid EIP-712 typed data structure
+        typed_data = {
+            "types": {
+                "EIP712Domain": [
+                    {"name": "name", "type": "string"},
+                    {"name": "version", "type": "string"},
+                    {"name": "chainId", "type": "uint256"},
+                    {"name": "verifyingContract", "type": "address"},
+                ],
+                "Order": [
+                    {"name": "salt", "type": "uint256"},
+                    {"name": "maker", "type": "address"},
+                ],
+            },
+            "primaryType": "Order",
+            "domain": {
+                "name": "TestExchange",
+                "version": "1",
+                "chainId": 56,
+                "verifyingContract": "0x" + "d" * 40,
+            },
+            "message": {
+                "salt": 123456789,
+                "maker": "0x" + "e" * 40,
+            },
+        }
+
+        result = compute_order_hash(typed_data)
+
+        assert result.startswith("0x"), f"Hash should start with '0x', got: {result}"
+        assert len(result) == 66, f"Hash should be 66 chars, got: {len(result)}"
+        assert all(c in "0123456789abcdef" for c in result[2:])

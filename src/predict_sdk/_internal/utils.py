@@ -80,7 +80,7 @@ def hash_kernel_message(message_hash: str) -> str:
     # Encode [bytes32, bytes32]
     encoded = encode(["bytes32", "bytes32"], [kernel_type_hash, message_hash_bytes])
 
-    return Web3.keccak(encoded).hex()
+    return "0x" + Web3.keccak(encoded).hex()
 
 
 def eip712_wrap_hash(message_hash: str, domain: dict[str, Any]) -> str:
@@ -112,7 +112,7 @@ def eip712_wrap_hash(message_hash: str, domain: dict[str, Any]) -> str:
     # Concatenate: 0x1901 + domainSeparator + messageHash
     data = b"\x19\x01" + domain_separator + final_hash_bytes
 
-    return Web3.keccak(data).hex()
+    return "0x" + Web3.keccak(data).hex()
 
 
 def _hash_eip712_domain(domain: dict[str, Any]) -> bytes:
@@ -167,4 +167,4 @@ def compute_order_hash(
     from eth_account.messages import encode_typed_data
 
     encoded = encode_typed_data(full_message=typed_data)
-    return Web3.keccak(encoded.body).hex()
+    return "0x" + Web3.keccak(encoded.body).hex()

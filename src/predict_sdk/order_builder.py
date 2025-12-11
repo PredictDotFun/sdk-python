@@ -12,6 +12,7 @@ from eth_account import Account
 from eth_account.messages import encode_typed_data
 from eth_account.signers.local import LocalAccount
 from web3 import Web3
+from web3.middleware import ExtraDataToPOAMiddleware
 
 from predict_sdk._internal.contracts import (
     Contracts,
@@ -169,6 +170,10 @@ class OrderBuilder:
             rpc_url = RPC_URLS_BY_CHAIN_ID[chain_id]
             web3 = Web3(Web3.HTTPProvider(rpc_url))
 
+            # Inject POA middleware for BNB chain (required for extraData validation)
+            if chain_id in (ChainId.BNB_MAINNET, ChainId.BNB_TESTNET):
+                web3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
+
             # Create contract instances
             contracts = make_contracts(web3, addresses, signer_account)
 
@@ -281,9 +286,6 @@ class OrderBuilder:
         book: Book,
     ) -> OrderAmounts:
         """Calculate market order amounts by quantity."""
-        if time.time() * 1000 - book.update_timestamp_ms > FIVE_MINUTES_SECONDS * 1000:
-            self._logger.warn("Order book is potentially stale. Consider using a more recent one.")
-
         qty = retain_significant_digits(data.quantity_wei, 5)
 
         if qty != data.quantity_wei:
@@ -321,9 +323,6 @@ class OrderBuilder:
         book: Book,
     ) -> OrderAmounts:
         """Calculate market order amounts by value (BUY only)."""
-        if time.time() * 1000 - book.update_timestamp_ms > FIVE_MINUTES_SECONDS * 1000:
-            self._logger.warn("Order book is potentially stale. Consider using a more recent one.")
-
         if data.value_wei < int(1e18):
             raise InvalidQuantityError()
 
@@ -565,7 +564,7 @@ class OrderBuilder:
             }
 
             encoded = encode_typed_data(full_message=structured_data)
-            return Web3.keccak(encoded.body).hex()
+            return "0x" + Web3.keccak(encoded.body).hex()
         except Exception as e:
             raise FailedTypedDataEncoderError(e) from e
 
@@ -612,6 +611,25 @@ class OrderBuilder:
             )
         except Exception as e:
             raise FailedOrderSignError(e) from e
+
+    async def sign_typed_data_order_async(self, typed_data: EIP712TypedData) -> SignedOrder:
+        """
+        Sign an order using EIP-712 typed data (async).
+
+        This is a convenience async wrapper around the sync method.
+        Signing is CPU-bound, so this simply calls the sync version.
+
+        Args:
+            typed_data: The typed data to sign.
+
+        Returns:
+            A SignedOrder with the signature attached.
+
+        Raises:
+            MissingSignerError: If no signer was provided.
+            FailedOrderSignError: If signing fails.
+        """
+        return self.sign_typed_data_order(typed_data)
 
     def _sign_typed_data(self, typed_data: EIP712TypedData) -> str:
         """Sign EIP-712 typed data with the signer."""
@@ -669,6 +687,24 @@ class OrderBuilder:
 
         # Concatenate: 0x01 + validator_address + signature
         return "0x01" + validator_address[2:] + signed.signature.hex()
+
+    async def sign_predict_account_message_async(self, message: str | dict[str, str]) -> str:
+        """
+        Sign a message for a Predict account (async).
+
+        This is a convenience async wrapper around the sync method.
+        Signing is CPU-bound, so this simply calls the sync version.
+
+        Args:
+            message: The message to sign (string or dict with 'raw' key for raw hash).
+
+        Returns:
+            The signature as a hex string.
+
+        Raises:
+            MissingSignerError: If no signer or predict_account was provided.
+        """
+        return self.sign_predict_account_message(message)
 
     # --- Async Contract Interaction Methods ---
 
@@ -954,66 +990,104 @@ class OrderBuilder:
         self,
         condition_id: str,
         index_set: Literal[1, 2],
+        amount: int | None = None,
         *,
+        is_neg_risk: bool,
         is_yield_bearing: bool,
     ) -> TransactionResult:
         """
-        Redeem positions for a non-NegRisk market (async).
+        Redeem positions for a market (async).
 
         Args:
             condition_id: The condition ID.
             index_set: The index set (1 or 2).
+            amount: The amount to redeem. Required for NegRisk markets.
+            is_neg_risk: Whether this is a NegRisk (winner-takes-all) market.
             is_yield_bearing: Whether this is a yield-bearing market.
 
         Returns:
             TransactionResult indicating success or failure.
+
+        Raises:
+            MissingSignerError: If signer was not provided.
+            ValueError: If amount is not provided for NegRisk markets.
         """
         if not self._contracts:
             raise MissingSignerError()
 
-        ct_contract = get_conditional_tokens_contract(
-            self._contracts,
-            is_neg_risk=False,
-            is_yield_bearing=is_yield_bearing,
-        )
-        amounts = [index_set]
+        if is_neg_risk:
+            if amount is None:
+                raise ValueError("amount is required for NegRisk markets")
 
-        return await self._handle_transaction_async(
-            ct_contract,
-            "redeemPositions",
-            self._addresses.USDT,
-            bytes.fromhex(ZERO_HASH[2:]),
-            condition_id,
-            amounts,
-        )
+            adapter_contract = get_neg_risk_adapter_contract(
+                self._contracts,
+                is_yield_bearing=is_yield_bearing,
+            )
+            amounts = [amount, 0] if index_set == 1 else [0, amount]
+
+            return await self._handle_transaction_async(
+                adapter_contract,
+                "redeemPositions",
+                condition_id,
+                amounts,
+            )
+        else:
+            ct_contract = get_conditional_tokens_contract(
+                self._contracts,
+                is_neg_risk=False,
+                is_yield_bearing=is_yield_bearing,
+            )
+            amounts = [index_set]
+
+            return await self._handle_transaction_async(
+                ct_contract,
+                "redeemPositions",
+                self._addresses.USDT,
+                bytes.fromhex(ZERO_HASH[2:]),
+                condition_id,
+                amounts,
+            )
 
     def redeem_positions(
         self,
         condition_id: str,
         index_set: Literal[1, 2],
+        amount: int | None = None,
         *,
+        is_neg_risk: bool,
         is_yield_bearing: bool,
     ) -> TransactionResult:
-        """Redeem positions for a non-NegRisk market (sync)."""
+        """Redeem positions for a market (sync)."""
         return self._run_async(
-            self.redeem_positions_async(condition_id, index_set, is_yield_bearing=is_yield_bearing)
+            self.redeem_positions_async(
+                condition_id,
+                index_set,
+                amount,
+                is_neg_risk=is_neg_risk,
+                is_yield_bearing=is_yield_bearing,
+            )
         )
 
-    async def redeem_neg_risk_positions_async(
+    # --- Merge Positions Methods ---
+
+    async def merge_positions_async(
         self,
         condition_id: str,
-        index_set: Literal[1, 2],
         amount: int,
         *,
+        is_neg_risk: bool,
         is_yield_bearing: bool,
     ) -> TransactionResult:
         """
-        Redeem positions for a NegRisk market (async).
+        Merge both outcome tokens back into collateral (USDT) (async).
+
+        This combines both outcome tokens (YES and NO) back into the collateral token.
+        Both outcome positions must have equal amounts to merge.
 
         Args:
-            condition_id: The condition ID.
-            index_set: The index set (1 or 2).
-            amount: The amount to redeem.
+            condition_id: The condition ID to merge positions for.
+            amount: The amount of each outcome token to merge.
+            is_neg_risk: Whether this is a NegRisk (winner-takes-all) market.
             is_yield_bearing: Whether this is a yield-bearing market.
 
         Returns:
@@ -1022,31 +1096,48 @@ class OrderBuilder:
         if not self._contracts:
             raise MissingSignerError()
 
-        adapter_contract = get_neg_risk_adapter_contract(
-            self._contracts,
-            is_yield_bearing=is_yield_bearing,
-        )
-        amounts = [amount, 0] if index_set == 1 else [0, amount]
+        if is_neg_risk:
+            # NegRisk markets use the adapter contract
+            adapter_contract = get_neg_risk_adapter_contract(
+                self._contracts,
+                is_yield_bearing=is_yield_bearing,
+            )
+            return await self._handle_transaction_async(
+                adapter_contract,
+                "mergePositions",
+                condition_id,
+                amount,
+            )
+        else:
+            # Standard markets use the conditional tokens contract
+            ct_contract = get_conditional_tokens_contract(
+                self._contracts,
+                is_neg_risk=False,
+                is_yield_bearing=is_yield_bearing,
+            )
+            partition = [1, 2]  # Both outcomes
+            return await self._handle_transaction_async(
+                ct_contract,
+                "mergePositions",
+                self._addresses.USDT,
+                bytes.fromhex(ZERO_HASH[2:]),
+                condition_id,
+                partition,
+                amount,
+            )
 
-        return await self._handle_transaction_async(
-            adapter_contract,
-            "redeemPositions",
-            condition_id,
-            amounts,
-        )
-
-    def redeem_neg_risk_positions(
+    def merge_positions(
         self,
         condition_id: str,
-        index_set: Literal[1, 2],
         amount: int,
         *,
+        is_neg_risk: bool,
         is_yield_bearing: bool,
     ) -> TransactionResult:
-        """Redeem positions for a NegRisk market (sync)."""
+        """Merge both outcome tokens back into collateral (USDT) (sync)."""
         return self._run_async(
-            self.redeem_neg_risk_positions_async(
-                condition_id, index_set, amount, is_yield_bearing=is_yield_bearing
+            self.merge_positions_async(
+                condition_id, amount, is_neg_risk=is_neg_risk, is_yield_bearing=is_yield_bearing
             )
         )
 

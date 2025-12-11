@@ -137,14 +137,38 @@ amounts = builder.get_market_order_amounts(
 result = builder.redeem_positions(
     condition_id="0x...",
     index_set=1,  # 1 or 2
+    is_neg_risk=False,
     is_yield_bearing=False,
 )
 
 # For NegRisk (winner-takes-all) markets
-result = builder.redeem_neg_risk_positions(
+result = builder.redeem_positions(
     condition_id="0x...",
     index_set=1,
+    amount=1000000000000000000,  # Required for NegRisk
+    is_neg_risk=True,
+    is_yield_bearing=False,
+)
+```
+
+## Merging Positions
+
+Merge both outcome tokens back into collateral (USDT). Useful when holding equal amounts of both YES and NO positions.
+
+```python
+# For standard markets
+result = builder.merge_positions(
+    condition_id="0x...",
+    amount=1000000000000000000,  # Amount to merge (in wei)
+    is_neg_risk=False,
+    is_yield_bearing=False,
+)
+
+# For NegRisk (winner-takes-all) markets
+result = builder.merge_positions(
+    condition_id="0x...",
     amount=1000000000000000000,
+    is_neg_risk=True,
     is_yield_bearing=False,
 )
 ```
@@ -219,8 +243,8 @@ OrderBuilder.make(
 #### Position Management
 
 - `balance_of(token: "USDT" = "USDT", address: str | None = None) -> int`
-- `redeem_positions(condition_id: str, index_set: 1 | 2, *, is_yield_bearing: bool) -> TransactionResult`
-- `redeem_neg_risk_positions(condition_id: str, index_set: 1 | 2, amount: int, *, is_yield_bearing: bool) -> TransactionResult`
+- `redeem_positions(condition_id: str, index_set: 1 | 2, amount: int | None = None, *, is_neg_risk: bool, is_yield_bearing: bool) -> TransactionResult`
+- `merge_positions(condition_id: str, amount: int, *, is_neg_risk: bool, is_yield_bearing: bool) -> TransactionResult`
 
 #### Order Cancellation
 
