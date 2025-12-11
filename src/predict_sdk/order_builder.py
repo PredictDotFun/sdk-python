@@ -374,7 +374,7 @@ class OrderBuilder:
         """
         Calculate the amounts for a MARKET strategy order.
 
-        The order book should be retrieved from the `GET /orderbook/{marketId}` endpoint.
+        The order book should be retrieved from the `GET /markets/{marketId}/orderbook` endpoint.
 
         Args:
             data: The input data (quantity or value based).

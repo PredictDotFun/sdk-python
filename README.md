@@ -117,7 +117,7 @@ amounts = builder.get_market_order_amounts(
         side=Side.BUY,
         quantity_wei=10000000000000000000,  # 10 shares
     ),
-    orderbook,  # From GET /orderbook/{marketId}
+    orderbook,  # From GET /markets/{marketId}/orderbook
 )
 
 # Market BUY by value (total USDT to spend)
