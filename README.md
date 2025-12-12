@@ -257,7 +257,7 @@ OrderBuilder.make(
 from predict_sdk import (
     ChainId,       # BNB_MAINNET (56), BNB_TESTNET (97)
     Side,          # BUY (0), SELL (1)
-    SignatureType, # EOA (0), POLY_PROXY (1), POLY_GNOSIS_SAFE (2)
+    SignatureType, # Only supports EOA (0)
     Order,
     SignedOrder,
     BuildOrderInput,

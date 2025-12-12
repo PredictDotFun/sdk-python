@@ -25,8 +25,6 @@ class SignatureType(IntEnum):
     """
 
     EOA = 0
-    POLY_PROXY = 1
-    POLY_GNOSIS_SAFE = 2
 
 
 class Side(IntEnum):
