@@ -276,7 +276,7 @@ from predict_sdk import (
 
 ## Requirements
 
-- Python >= 3.11
+- Python >= 3.10
 - web3.py >= 6.0.0
 
 ## License
