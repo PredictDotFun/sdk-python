@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Literal, TypeVar, overload
 
 from eth_account import Account
-from eth_account.messages import encode_typed_data
+from eth_account.messages import _hash_eip191_message, encode_defunct, encode_typed_data
 from eth_account.signers.local import LocalAccount
 from web3 import Web3
 from web3.middleware import ExtraDataToPOAMiddleware
@@ -419,7 +419,9 @@ class OrderBuilder:
         limit_expiration = int(expires_at.timestamp())
         market_expiration = int(time.time()) + FIVE_MINUTES_SECONDS
 
-        if self._predict_account and (data.maker or data.signer):
+        if self._predict_account and (
+            data.maker != self._predict_account or data.signer != self._predict_account
+        ):
             self._logger.warn("When using a Predict account the maker and signer are ignored.")
 
         if strategy == "MARKET" and data.expires_at:
@@ -564,7 +566,7 @@ class OrderBuilder:
             }
 
             encoded = encode_typed_data(full_message=structured_data)
-            return "0x" + Web3.keccak(encoded.body).hex()
+            return "0x" + _hash_eip191_message(encoded).hex()
         except Exception as e:
             raise FailedTypedDataEncoderError(e) from e
 
@@ -669,7 +671,9 @@ class OrderBuilder:
         if isinstance(message, dict) and "raw" in message:
             message_hash = message["raw"]
         else:
-            message_hash = Web3.keccak(text=str(message)).hex()
+            # Use EIP-191 prefix hash to match TS SDK's hashMessage()
+            msg = encode_defunct(text=str(message))
+            message_hash = "0x" + _hash_eip191_message(msg).hex()
 
         digest = eip712_wrap_hash(
             message_hash,
@@ -680,10 +684,8 @@ class OrderBuilder:
         message_bytes = (
             bytes.fromhex(digest[2:]) if digest.startswith("0x") else bytes.fromhex(digest)
         )
-        from eth_account.messages import encode_defunct
-
-        msg = encode_defunct(primitive=message_bytes)
-        signed = self._signer.sign_message(msg)
+        signable_msg = encode_defunct(primitive=message_bytes)
+        signed = self._signer.sign_message(signable_msg)
 
         # Concatenate: 0x01 + validator_address + signature
         return "0x01" + validator_address[2:] + signed.signature.hex()

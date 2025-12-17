@@ -208,6 +208,65 @@ class TestLimitOrderAmounts:
 class TestTypedData:
     """Test EIP-712 typed data generation."""
 
+    def test_build_typed_data_hash_matches_ts_sdk(self, builder_with_signer: OrderBuilder):
+        """Hash should match the TS SDK's TypedDataEncoder.hash() output."""
+        from predict_sdk import EIP712TypedData
+
+        # Static typed data with known expected hash from TS SDK
+        typed_data = EIP712TypedData(
+            primary_type="Order",
+            types={
+                "EIP712Domain": [
+                    {"name": "name", "type": "string"},
+                    {"name": "version", "type": "string"},
+                    {"name": "chainId", "type": "uint256"},
+                    {"name": "verifyingContract", "type": "address"},
+                ],
+                "Order": [
+                    {"name": "salt", "type": "uint256"},
+                    {"name": "maker", "type": "address"},
+                    {"name": "signer", "type": "address"},
+                    {"name": "taker", "type": "address"},
+                    {"name": "tokenId", "type": "uint256"},
+                    {"name": "makerAmount", "type": "uint256"},
+                    {"name": "takerAmount", "type": "uint256"},
+                    {"name": "expiration", "type": "uint256"},
+                    {"name": "nonce", "type": "uint256"},
+                    {"name": "feeRateBps", "type": "uint256"},
+                    {"name": "side", "type": "uint8"},
+                    {"name": "signatureType", "type": "uint8"},
+                ],
+            },
+            domain={
+                "name": "predict.fun CTF Exchange",
+                "version": "1",
+                "chainId": 56,
+                "verifyingContract": "0x8BC070BEdAB741406F4B1Eb65A72bee27894B689",
+            },
+            message={
+                "salt": "123456789",
+                "maker": "0x1234567890123456789012345678901234567890",
+                "signer": "0x1234567890123456789012345678901234567890",
+                "taker": "0x0000000000000000000000000000000000000000",
+                "tokenId": "12345",
+                "makerAmount": "1000000000000000000",
+                "takerAmount": "2000000000000000000",
+                "expiration": "4102444800",
+                "nonce": "0",
+                "feeRateBps": "100",
+                "side": 0,
+                "signatureType": 0,
+            },
+        )
+
+        hash_result = builder_with_signer.build_typed_data_hash(typed_data)
+
+        # Expected hash from TS SDK's TypedDataEncoder.hash()
+        expected_hash = "0x814000c89efa61ae42a2bcc4c98e06e90c11480b95a12edea00e3411ec76821d"
+        assert hash_result == expected_hash, (
+            f"Hash mismatch: got {hash_result}, expected {expected_hash}"
+        )
+
     def test_build_typed_data_hash_has_0x_prefix(self, builder_with_signer: OrderBuilder):
         """Hash from build_typed_data_hash should have 0x prefix."""
         order = builder_with_signer.build_order(

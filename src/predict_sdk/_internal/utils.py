@@ -164,7 +164,7 @@ def compute_order_hash(
     Returns:
         The hash as a hex string.
     """
-    from eth_account.messages import encode_typed_data
+    from eth_account.messages import _hash_eip191_message, encode_typed_data
 
     encoded = encode_typed_data(full_message=typed_data)
-    return "0x" + Web3.keccak(encoded.body).hex()
+    return "0x" + _hash_eip191_message(encoded).hex()

@@ -106,6 +106,31 @@ builder = OrderBuilder.make(
 )
 ```
 
+## Signing Messages with Predict Accounts
+
+When using a Predict account (smart wallet), you can sign arbitrary messages that can be verified on-chain:
+
+```python
+from predict_sdk import OrderBuilder, ChainId, OrderBuilderOptions
+
+builder = OrderBuilder.make(
+    ChainId.BNB_MAINNET,
+    private_key,
+    OrderBuilderOptions(predict_account="0x..."),
+)
+
+# Sign a string message
+signature = builder.sign_predict_account_message("Hello, world!")
+
+# Or sign a pre-computed hash (useful for EIP-712 typed data)
+signature = builder.sign_predict_account_message({"raw": "0x1234..."})
+
+# Async version available
+signature = await builder.sign_predict_account_message_async("Hello, world!")
+```
+
+The signature is formatted for Kernel smart wallet verification, including the ECDSA validator address prefix.
+
 ## Market Orders
 
 ```python
@@ -232,6 +257,8 @@ OrderBuilder.make(
 - `build_typed_data(order: Order, *, is_neg_risk: bool, is_yield_bearing: bool) -> EIP712TypedData`
 - `build_typed_data_hash(typed_data: EIP712TypedData) -> str`
 - `sign_typed_data_order(typed_data: EIP712TypedData) -> SignedOrder`
+- `sign_predict_account_message(message: str | dict) -> str` - Sign a message for a Predict account
+- `sign_predict_account_message_async(message: str | dict) -> str` - Async version
 
 #### Approval Methods
 
