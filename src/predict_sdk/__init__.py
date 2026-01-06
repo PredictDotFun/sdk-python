@@ -69,7 +69,7 @@ from predict_sdk.types import (
     TransactionSuccess,
 )
 
-__version__ = "0.0.6"
+__version__ = "0.0.8"
 
 __all__ = [
     # Version
