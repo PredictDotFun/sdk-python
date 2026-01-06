@@ -19,6 +19,7 @@ from predict_sdk._internal.contracts import (
     get_conditional_tokens_contract,
     get_exchange_contract,
     get_neg_risk_adapter_contract,
+    make_contract,
     make_contracts,
 )
 from predict_sdk._internal.utils import (
@@ -26,6 +27,7 @@ from predict_sdk._internal.utils import (
     generate_order_salt,
     retain_significant_digits,
 )
+from predict_sdk.abis import KERNEL_ABI
 from predict_sdk.constants import (
     ADDRESSES_BY_CHAIN_ID,
     EIP712_DOMAIN,
@@ -710,6 +712,33 @@ class OrderBuilder:
 
     # --- Async Contract Interaction Methods ---
 
+    def _encode_execution_calldata(self, to: str, calldata: str, value: int = 0) -> bytes:
+        """
+        Encode calldata for Kernel's execute function.
+
+        Format: target_address (20 bytes) + value (32 bytes) + calldata
+        Matches TS SDK implementation at OrderBuilder.ts:307-309
+
+        Args:
+            to: Target contract address
+            calldata: Encoded function call (hex string with 0x prefix)
+            value: ETH value to send (default 0)
+
+        Returns:
+            Encoded execution calldata as bytes
+        """
+        # Convert address to bytes (remove 0x, convert to bytes)
+        address_bytes = bytes.fromhex(to[2:] if to.startswith("0x") else to)
+
+        # Convert value to 32-byte big-endian representation
+        value_bytes = value.to_bytes(32, byteorder="big")
+
+        # Convert calldata to bytes
+        calldata_bytes = bytes.fromhex(calldata[2:] if calldata.startswith("0x") else calldata)
+
+        # Concatenate: address + value + calldata
+        return address_bytes + value_bytes + calldata_bytes
+
     async def _handle_transaction_async(
         self,
         contract: Contract,
@@ -792,12 +821,24 @@ class OrderBuilder:
             is_yield_bearing=is_yield_bearing,
         )
 
-        return await self._handle_transaction_async(
-            ct_contract,
-            "setApprovalForAll",
-            exchange_address,
-            approved,
-        )
+        if self._predict_account:
+            encoded = ct_contract.encode_abi(
+                abi_element_identifier="setApprovalForAll",
+                args=[exchange_address, approved],
+            )
+            calldata = self._encode_execution_calldata(ct_contract.address, encoded, value=0)
+            assert self._web3 is not None
+            kernel_contract = make_contract(self._web3, self._predict_account, KERNEL_ABI)
+            return await self._handle_transaction_async(
+                kernel_contract, "execute", self._execution_mode, calldata
+            )
+        else:
+            return await self._handle_transaction_async(
+                ct_contract,
+                "setApprovalForAll",
+                exchange_address,
+                approved,
+            )
 
     def set_ctf_exchange_approval(
         self,
@@ -836,12 +877,24 @@ class OrderBuilder:
             is_yield_bearing=is_yield_bearing,
         )
 
-        return await self._handle_transaction_async(
-            ct_contract,
-            "setApprovalForAll",
-            adapter_address,
-            approved,
-        )
+        if self._predict_account:
+            encoded = ct_contract.encode_abi(
+                abi_element_identifier="setApprovalForAll",
+                args=[adapter_address, approved],
+            )
+            calldata = self._encode_execution_calldata(ct_contract.address, encoded, value=0)
+            assert self._web3 is not None
+            kernel_contract = make_contract(self._web3, self._predict_account, KERNEL_ABI)
+            return await self._handle_transaction_async(
+                kernel_contract, "execute", self._execution_mode, calldata
+            )
+        else:
+            return await self._handle_transaction_async(
+                ct_contract,
+                "setApprovalForAll",
+                adapter_address,
+                approved,
+            )
 
     def set_neg_risk_adapter_approval(
         self,
@@ -870,12 +923,26 @@ class OrderBuilder:
 
         exchange_address = self._get_exchange_identifier(is_neg_risk, is_yield_bearing)
 
-        return await self._handle_transaction_async(
-            self._contracts.usdt,
-            "approve",
-            exchange_address,
-            amount,
-        )
+        if self._predict_account:
+            encoded = self._contracts.usdt.encode_abi(
+                abi_element_identifier="approve",
+                args=[exchange_address, amount],
+            )
+            calldata = self._encode_execution_calldata(
+                self._contracts.usdt.address, encoded, value=0
+            )
+            assert self._web3 is not None
+            kernel_contract = make_contract(self._web3, self._predict_account, KERNEL_ABI)
+            return await self._handle_transaction_async(
+                kernel_contract, "execute", self._execution_mode, calldata
+            )
+        else:
+            return await self._handle_transaction_async(
+                self._contracts.usdt,
+                "approve",
+                exchange_address,
+                amount,
+            )
 
     def set_ctf_exchange_allowance(
         self,
@@ -1027,12 +1094,26 @@ class OrderBuilder:
             )
             amounts = [amount, 0] if index_set == 1 else [0, amount]
 
-            return await self._handle_transaction_async(
-                adapter_contract,
-                "redeemPositions",
-                condition_id,
-                amounts,
-            )
+            if self._predict_account:
+                encoded = adapter_contract.encode_abi(
+                    abi_element_identifier="redeemPositions",
+                    args=[condition_id, amounts],
+                )
+                calldata = self._encode_execution_calldata(
+                    adapter_contract.address, encoded, value=0
+                )
+                assert self._web3 is not None
+                kernel_contract = make_contract(self._web3, self._predict_account, KERNEL_ABI)
+                return await self._handle_transaction_async(
+                    kernel_contract, "execute", self._execution_mode, calldata
+                )
+            else:
+                return await self._handle_transaction_async(
+                    adapter_contract,
+                    "redeemPositions",
+                    condition_id,
+                    amounts,
+                )
         else:
             ct_contract = get_conditional_tokens_contract(
                 self._contracts,
@@ -1041,14 +1122,31 @@ class OrderBuilder:
             )
             amounts = [index_set]
 
-            return await self._handle_transaction_async(
-                ct_contract,
-                "redeemPositions",
-                self._addresses.USDT,
-                bytes.fromhex(ZERO_HASH[2:]),
-                condition_id,
-                amounts,
-            )
+            if self._predict_account:
+                encoded = ct_contract.encode_abi(
+                    abi_element_identifier="redeemPositions",
+                    args=[
+                        self._addresses.USDT,
+                        bytes.fromhex(ZERO_HASH[2:]),
+                        condition_id,
+                        amounts,
+                    ],
+                )
+                calldata = self._encode_execution_calldata(ct_contract.address, encoded, value=0)
+                assert self._web3 is not None
+                kernel_contract = make_contract(self._web3, self._predict_account, KERNEL_ABI)
+                return await self._handle_transaction_async(
+                    kernel_contract, "execute", self._execution_mode, calldata
+                )
+            else:
+                return await self._handle_transaction_async(
+                    ct_contract,
+                    "redeemPositions",
+                    self._addresses.USDT,
+                    bytes.fromhex(ZERO_HASH[2:]),
+                    condition_id,
+                    amounts,
+                )
 
     def redeem_positions(
         self,
@@ -1104,12 +1202,27 @@ class OrderBuilder:
                 self._contracts,
                 is_yield_bearing=is_yield_bearing,
             )
-            return await self._handle_transaction_async(
-                adapter_contract,
-                "mergePositions",
-                condition_id,
-                amount,
-            )
+
+            if self._predict_account:
+                encoded = adapter_contract.encode_abi(
+                    abi_element_identifier="mergePositions",
+                    args=[condition_id, amount],
+                )
+                calldata = self._encode_execution_calldata(
+                    adapter_contract.address, encoded, value=0
+                )
+                assert self._web3 is not None
+                kernel_contract = make_contract(self._web3, self._predict_account, KERNEL_ABI)
+                return await self._handle_transaction_async(
+                    kernel_contract, "execute", self._execution_mode, calldata
+                )
+            else:
+                return await self._handle_transaction_async(
+                    adapter_contract,
+                    "mergePositions",
+                    condition_id,
+                    amount,
+                )
         else:
             # Standard markets use the conditional tokens contract
             ct_contract = get_conditional_tokens_contract(
@@ -1118,15 +1231,34 @@ class OrderBuilder:
                 is_yield_bearing=is_yield_bearing,
             )
             partition = [1, 2]  # Both outcomes
-            return await self._handle_transaction_async(
-                ct_contract,
-                "mergePositions",
-                self._addresses.USDT,
-                bytes.fromhex(ZERO_HASH[2:]),
-                condition_id,
-                partition,
-                amount,
-            )
+
+            if self._predict_account:
+                encoded = ct_contract.encode_abi(
+                    abi_element_identifier="mergePositions",
+                    args=[
+                        self._addresses.USDT,
+                        bytes.fromhex(ZERO_HASH[2:]),
+                        condition_id,
+                        partition,
+                        amount,
+                    ],
+                )
+                calldata = self._encode_execution_calldata(ct_contract.address, encoded, value=0)
+                assert self._web3 is not None
+                kernel_contract = make_contract(self._web3, self._predict_account, KERNEL_ABI)
+                return await self._handle_transaction_async(
+                    kernel_contract, "execute", self._execution_mode, calldata
+                )
+            else:
+                return await self._handle_transaction_async(
+                    ct_contract,
+                    "mergePositions",
+                    self._addresses.USDT,
+                    bytes.fromhex(ZERO_HASH[2:]),
+                    condition_id,
+                    partition,
+                    amount,
+                )
 
     def merge_positions(
         self,
@@ -1192,11 +1324,32 @@ class OrderBuilder:
                 )
             )
 
-        return await self._handle_transaction_async(
-            exchange_contract,
-            "cancelOrders",
-            order_structs,
-        )
+        if self._predict_account:
+            encoded = exchange_contract.encode_abi(
+                abi_element_identifier="cancelOrders", args=[order_structs]
+            )
+
+            calldata = self._encode_execution_calldata(
+                exchange_contract.address,
+                encoded,
+                value=0,
+            )
+
+            assert self._web3 is not None
+            kernel_contract = make_contract(self._web3, self._predict_account, KERNEL_ABI)
+
+            return await self._handle_transaction_async(
+                kernel_contract,
+                "execute",
+                self._execution_mode,
+                calldata,
+            )
+        else:
+            return await self._handle_transaction_async(
+                exchange_contract,
+                "cancelOrders",
+                order_structs,
+            )
 
     def cancel_orders(
         self,
