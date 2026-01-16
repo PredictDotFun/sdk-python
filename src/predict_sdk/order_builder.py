@@ -1275,6 +1275,113 @@ class OrderBuilder:
             )
         )
 
+    # --- Split Positions Methods ---
+
+    async def split_positions_async(
+        self,
+        condition_id: str,
+        amount: int,
+        *,
+        is_neg_risk: bool,
+        is_yield_bearing: bool,
+    ) -> TransactionResult:
+        """
+        Split collateral (USDT) into outcome tokens (async).
+
+        This splits the collateral token into both outcome tokens for a condition.
+        The amount specified will be converted into equal amounts of each outcome token.
+
+        Args:
+            condition_id: The condition ID to split positions for.
+            amount: The amount of collateral to split into outcome tokens.
+            is_neg_risk: Whether this is a NegRisk (winner-takes-all) market.
+            is_yield_bearing: Whether this is a yield-bearing market.
+
+        Returns:
+            TransactionResult indicating success or failure.
+        """
+        if not self._contracts:
+            raise MissingSignerError()
+
+        if is_neg_risk:
+            # NegRisk markets use the adapter contract
+            adapter_contract = get_neg_risk_adapter_contract(
+                self._contracts,
+                is_yield_bearing=is_yield_bearing,
+            )
+
+            if self._predict_account:
+                encoded = adapter_contract.encode_abi(
+                    abi_element_identifier="splitPosition",
+                    args=[condition_id, amount],
+                )
+                calldata = self._encode_execution_calldata(
+                    adapter_contract.address, encoded, value=0
+                )
+                assert self._web3 is not None
+                kernel_contract = make_contract(self._web3, self._predict_account, KERNEL_ABI)
+                return await self._handle_transaction_async(
+                    kernel_contract, "execute", self._execution_mode, calldata
+                )
+            else:
+                return await self._handle_transaction_async(
+                    adapter_contract,
+                    "splitPosition",
+                    condition_id,
+                    amount,
+                )
+        else:
+            # Standard markets use the conditional tokens contract
+            ct_contract = get_conditional_tokens_contract(
+                self._contracts,
+                is_neg_risk=False,
+                is_yield_bearing=is_yield_bearing,
+            )
+            partition = [1, 2]  # Both outcomes
+
+            if self._predict_account:
+                encoded = ct_contract.encode_abi(
+                    abi_element_identifier="splitPosition",
+                    args=[
+                        self._addresses.USDT,
+                        bytes.fromhex(ZERO_HASH[2:]),
+                        condition_id,
+                        partition,
+                        amount,
+                    ],
+                )
+                calldata = self._encode_execution_calldata(ct_contract.address, encoded, value=0)
+                assert self._web3 is not None
+                kernel_contract = make_contract(self._web3, self._predict_account, KERNEL_ABI)
+                return await self._handle_transaction_async(
+                    kernel_contract, "execute", self._execution_mode, calldata
+                )
+            else:
+                return await self._handle_transaction_async(
+                    ct_contract,
+                    "splitPosition",
+                    self._addresses.USDT,
+                    bytes.fromhex(ZERO_HASH[2:]),
+                    condition_id,
+                    partition,
+                    amount,
+                )
+
+    def split_positions(
+        self,
+        condition_id: str,
+        amount: int,
+        *,
+        is_neg_risk: bool,
+        is_yield_bearing: bool,
+    ) -> TransactionResult:
+        """Split collateral (USDT) into outcome tokens (sync)."""
+        return self._run_async(
+            self.split_positions_async(
+                condition_id, amount, is_neg_risk=is_neg_risk, is_yield_bearing=is_yield_bearing
+            )
+        )
+
     # --- Cancel Orders Methods ---
 
     async def cancel_orders_async(

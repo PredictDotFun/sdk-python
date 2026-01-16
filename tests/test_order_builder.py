@@ -508,6 +508,52 @@ class TestMergePositions:
             )
 
 
+class TestSplitPositions:
+    """Test position splitting functionality."""
+
+    def test_split_positions_without_signer_raises(self, builder: OrderBuilder):
+        """split_positions without signer should raise MissingSignerError."""
+        with pytest.raises(MissingSignerError):
+            builder.split_positions(
+                condition_id="0x" + "0" * 64,
+                amount=1000000000000000000,
+                is_neg_risk=False,
+                is_yield_bearing=False,
+            )
+
+    def test_split_positions_neg_risk_without_signer_raises(self, builder: OrderBuilder):
+        """split_positions for NegRisk without signer should raise MissingSignerError."""
+        with pytest.raises(MissingSignerError):
+            builder.split_positions(
+                condition_id="0x" + "0" * 64,
+                amount=1000000000000000000,
+                is_neg_risk=True,
+                is_yield_bearing=False,
+            )
+
+    def test_split_positions_yield_bearing_without_signer_raises(self, builder: OrderBuilder):
+        """split_positions for yield-bearing without signer should raise MissingSignerError."""
+        with pytest.raises(MissingSignerError):
+            builder.split_positions(
+                condition_id="0x" + "0" * 64,
+                amount=1000000000000000000,
+                is_neg_risk=False,
+                is_yield_bearing=True,
+            )
+
+    def test_split_positions_neg_risk_yield_bearing_without_signer_raises(
+        self, builder: OrderBuilder
+    ):
+        """split_positions for NegRisk yield-bearing without signer should raise MissingSignerError."""
+        with pytest.raises(MissingSignerError):
+            builder.split_positions(
+                condition_id="0x" + "0" * 64,
+                amount=1000000000000000000,
+                is_neg_risk=True,
+                is_yield_bearing=True,
+            )
+
+
 class TestTypedDataCombinations:
     """Test EIP-712 typed data generation for all market type combinations."""
 
