@@ -24,6 +24,7 @@ from predict_sdk._internal.contracts import (
 )
 from predict_sdk._internal.utils import (
     eip712_wrap_hash,
+    float_to_wei,
     generate_order_salt,
     retain_significant_digits,
 )
@@ -265,19 +266,21 @@ class OrderBuilder:
 
         for price, qty in depths:
             remaining_qty_wei = quantity_wei - result.quantity_wei
-            price_wei = int(price * self._precision)
-            qty_wei = int(qty * self._precision)
+            price_wei = float_to_wei(price, self._precision)
+            qty_wei = float_to_wei(qty, self._precision)
 
             if remaining_qty_wei <= 0:
                 break
 
             if remaining_qty_wei < qty_wei:
                 result.quantity_wei += remaining_qty_wei
-                result.price_wei += (price_wei * remaining_qty_wei) // self._precision
+                # Accumulate price * qty without intermediate division to preserve precision
+                result.price_wei += price_wei * remaining_qty_wei
                 result.last_price_wei = price_wei
             else:
                 result.quantity_wei += qty_wei
-                result.price_wei += (price_wei * qty_wei) // self._precision
+                # Accumulate price * qty without intermediate division to preserve precision
+                result.price_wei += price_wei * qty_wei
                 result.last_price_wei = price_wei
 
         return result
@@ -302,7 +305,9 @@ class OrderBuilder:
             processed = self._process_book(book.asks, qty)
             return OrderAmounts(
                 last_price=processed.last_price_wei,
-                price_per_share=(processed.price_wei * self._precision) // processed.quantity_wei
+                # price_wei now contains sum of (price * qty) without division,
+                # so divide by quantity only (no need to multiply by precision)
+                price_per_share=processed.price_wei // processed.quantity_wei
                 if processed.quantity_wei > 0
                 else 0,
                 maker_amount=(processed.last_price_wei * processed.quantity_wei) // self._precision,
@@ -312,7 +317,9 @@ class OrderBuilder:
             processed = self._process_book(book.bids, qty)
             return OrderAmounts(
                 last_price=processed.last_price_wei,
-                price_per_share=(processed.price_wei * self._precision) // processed.quantity_wei
+                # price_wei now contains sum of (price * qty) without division,
+                # so divide by quantity only (no need to multiply by precision)
+                price_per_share=processed.price_wei // processed.quantity_wei
                 if processed.quantity_wei > 0
                 else 0,
                 maker_amount=processed.quantity_wei,
@@ -333,8 +340,8 @@ class OrderBuilder:
         total_price = 0
 
         for price, qty in book.asks:
-            price_wei = int(price * self._precision)
-            qty_wei = int(qty * self._precision)
+            price_wei = float_to_wei(price, self._precision)
+            qty_wei = float_to_wei(qty, self._precision)
 
             remaining_spend = currency_amount_wei - total_price
 

@@ -3,12 +3,39 @@
 from __future__ import annotations
 
 import random
+from decimal import ROUND_DOWN, Decimal
 from typing import Any
 
 from eth_abi import encode  # type: ignore[attr-defined]
 from web3 import Web3
 
 from predict_sdk.constants import MAX_SALT
+
+
+def float_to_wei(value: float, precision: int) -> int:
+    """
+    Convert a floating-point value to wei using exact decimal arithmetic.
+
+    Avoids IEEE 754 floating-point precision errors by converting
+    the float to a string first, then using Python's Decimal module.
+
+    Uses ROUND_DOWN to match Solidity's integer division behavior.
+
+    Args:
+        value: The floating-point value to convert (e.g., 0.46 for a price).
+        precision: The precision multiplier (e.g., 10**18 for wei).
+
+    Returns:
+        The value converted to wei as an integer.
+
+    Example:
+        >>> float_to_wei(0.46, 10**18)
+        460000000000000000
+        >>> float_to_wei(0.421031, 10**18)
+        421031000000000000  # Correct! (not 421030999999999936)
+    """
+    d = Decimal(str(value)) * Decimal(precision)
+    return int(d.quantize(Decimal("1"), rounding=ROUND_DOWN))
 
 
 def generate_order_salt() -> str:
