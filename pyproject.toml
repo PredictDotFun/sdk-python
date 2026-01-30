@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "predict_sdk"
-version = "0.0.10"
+version = "0.0.12"
 description = "A Python SDK to help developers interface with the Predict.fun protocol"
 readme = "README.md"
 license = "MIT"
