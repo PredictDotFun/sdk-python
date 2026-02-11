@@ -603,6 +603,7 @@ class OrderBuilder:
                 hash_ = self.build_typed_data_hash(typed_data)
                 signature = self.sign_predict_account_message({"raw": hash_})
             else:
+                hash_ = None
                 signature = self._sign_typed_data(typed_data)
 
             return SignedOrder(
@@ -619,6 +620,7 @@ class OrderBuilder:
                 side=order.side,
                 signature_type=order.signature_type,
                 signature=signature,
+                hash=hash_,
             )
         except Exception as e:
             raise FailedOrderSignError(e) from e
