@@ -153,7 +153,46 @@ amounts = builder.get_market_order_amounts(
     ),
     orderbook,
 )
+
+print(f"Maker Amount: {amounts.maker_amount}")
+print(f"Taker Amount: {amounts.taker_amount}")
+print(f"Price Per Share: {amounts.price_per_share}")
+print(f"Slippage Applied: {amounts.slippage_bps} bps")
 ```
+
+### Slippage
+
+By default, no additional slippage is applied to the order maker/taker amounts. You can specify a slippage tolerance in basis points (1 bps = 0.01%) to adjust the amounts:
+
+- **BUY orders**: slippage increases the `maker_amount` (you're willing to pay more)
+- **SELL orders**: slippage decreases the `taker_amount` (you're willing to receive less)
+
+```python
+# Market order with 1% slippage (100 bps)
+amounts = builder.get_market_order_amounts(
+    MarketHelperInput(
+        side=Side.BUY,
+        quantity_wei=10000000000000000000,  # 10 shares
+        slippage_bps=100,  # 1% slippage tolerance
+    ),
+    orderbook,
+)
+
+# The returned OrderAmounts includes the slippage that was applied
+print(f"Slippage: {amounts.slippage_bps} bps")  # 100
+
+# Value-based market order with slippage
+amounts = builder.get_market_order_amounts(
+    MarketHelperValueInput(
+        side=Side.BUY,
+        value_wei=5000000000000000000,  # 5 USDT
+        slippage_bps=50,  # 0.5% slippage tolerance
+    ),
+    orderbook,
+)
+```
+
+**Note:** Slippage will only be applied if you provide the `slippageBps` value when submitting your order to the REST API.
 
 ## Redeeming Positions
 
