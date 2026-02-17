@@ -78,7 +78,7 @@ class InvalidSignerError(PredictSDKError):
 
     def __init__(self) -> None:
         super().__init__(
-            "The signer is not the owner of the Predict account or you are on the wrong chain. "
+            "The signer is not the owner of the Predict account or the Predict account was not initiated via the web app first. "
             "The signer must be the Privy wallet exported from your account's settings. "
             "See: https://predict.fun/account/settings"
         )
