@@ -40,6 +40,8 @@ class MarketHelperInput:
 
     side: Side
     quantity_wei: int
+    slippage_bps: int = 0
+    """Slippage tolerance in basis points (1 bps = 0.01%). Defaults to 0."""
 
 
 @dataclass
@@ -52,6 +54,8 @@ class MarketHelperValueInput:
 
     side: Literal[Side.BUY]
     value_wei: int
+    slippage_bps: int = 0
+    """Slippage tolerance in basis points (1 bps = 0.01%). Defaults to 0."""
 
 
 @dataclass
@@ -71,6 +75,8 @@ class OrderAmounts:
     price_per_share: int
     maker_amount: int
     taker_amount: int
+    slippage_bps: int = 0
+    """The slippage tolerance in basis points that was applied to the amounts. 0 if none."""
 
 
 @dataclass

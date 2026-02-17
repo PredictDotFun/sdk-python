@@ -384,3 +384,195 @@ class TestFloatingPointPrecision:
         # This tests the fix for intermediate division precision loss
         assert amounts.price_per_share == 777000000000000000
         assert amounts.last_price == 777000000000000000
+
+
+class TestSlippage:
+    """Test slippage application to market order amounts."""
+
+    @pytest.fixture
+    def slippage_book(self) -> Book:
+        """Orderbook for slippage tests."""
+        return Book(
+            market_id=1,
+            update_timestamp_ms=0,
+            asks=[
+                (0.27, 100.0),
+                (0.30, 200.0),
+            ],
+            bids=[
+                (0.27, 100.0),
+                (0.25, 200.0),
+            ],
+        )
+
+    def test_buy_by_quantity_inflates_maker_amount(
+        self, builder: OrderBuilder, slippage_book: Book
+    ):
+        """BUY with slippage should inflate makerAmount (collateral offered)."""
+        without = builder.get_market_order_amounts(
+            MarketHelperInput(side=Side.BUY, quantity_wei=int(100e18)),
+            slippage_book,
+        )
+        with_slippage = builder.get_market_order_amounts(
+            MarketHelperInput(side=Side.BUY, quantity_wei=int(100e18), slippage_bps=500),
+            slippage_book,
+        )
+
+        expected_maker = (without.maker_amount * 10_500) // 10_000
+        assert with_slippage.maker_amount == expected_maker
+        assert with_slippage.taker_amount == without.taker_amount
+        assert with_slippage.price_per_share == without.price_per_share
+        assert with_slippage.last_price == without.last_price
+        assert with_slippage.slippage_bps == 500
+
+    def test_sell_by_quantity_deflates_taker_amount(
+        self, builder: OrderBuilder, slippage_book: Book
+    ):
+        """SELL with slippage should deflate takerAmount (collateral received)."""
+        without = builder.get_market_order_amounts(
+            MarketHelperInput(side=Side.SELL, quantity_wei=int(100e18)),
+            slippage_book,
+        )
+        with_slippage = builder.get_market_order_amounts(
+            MarketHelperInput(side=Side.SELL, quantity_wei=int(100e18), slippage_bps=500),
+            slippage_book,
+        )
+
+        expected_taker = (without.taker_amount * 9_500) // 10_000
+        assert with_slippage.taker_amount == expected_taker
+        assert with_slippage.maker_amount == without.maker_amount
+        assert with_slippage.price_per_share == without.price_per_share
+        assert with_slippage.last_price == without.last_price
+        assert with_slippage.slippage_bps == 500
+
+    def test_buy_by_value_inflates_maker_amount(self, builder: OrderBuilder, slippage_book: Book):
+        """BUY by value with slippage should inflate makerAmount."""
+        without = builder.get_market_order_amounts(
+            MarketHelperValueInput(side=Side.BUY, value_wei=int(10e18)),
+            slippage_book,
+        )
+        with_slippage = builder.get_market_order_amounts(
+            MarketHelperValueInput(side=Side.BUY, value_wei=int(10e18), slippage_bps=500),
+            slippage_book,
+        )
+
+        expected_maker = (without.maker_amount * 10_500) // 10_000
+        assert with_slippage.maker_amount == expected_maker
+        assert with_slippage.taker_amount == without.taker_amount
+        assert with_slippage.slippage_bps == 500
+
+    def test_no_slippage_by_default(self, builder: OrderBuilder, slippage_book: Book):
+        """Omitting slippage_bps should produce amounts identical to slippage_bps=0."""
+        result = builder.get_market_order_amounts(
+            MarketHelperInput(side=Side.BUY, quantity_wei=int(100e18)),
+            slippage_book,
+        )
+
+        # makerAmount should equal lastPrice * qty / 1e18 (no slippage applied)
+        expected_maker = (result.last_price * int(100e18)) // int(1e18)
+        assert result.maker_amount == expected_maker
+        assert result.slippage_bps == 0
+
+    def test_explicit_zero_slippage_matches_default(
+        self, builder: OrderBuilder, slippage_book: Book
+    ):
+        """slippage_bps=0 should produce identical results to omitting it."""
+        default_result = builder.get_market_order_amounts(
+            MarketHelperInput(side=Side.BUY, quantity_wei=int(100e18)),
+            slippage_book,
+        )
+        zero_result = builder.get_market_order_amounts(
+            MarketHelperInput(side=Side.BUY, quantity_wei=int(100e18), slippage_bps=0),
+            slippage_book,
+        )
+
+        assert zero_result.maker_amount == default_result.maker_amount
+        assert zero_result.taker_amount == default_result.taker_amount
+        assert zero_result.slippage_bps == 0
+
+    def test_buy_clamps_at_one_dollar_per_share(self, builder: OrderBuilder):
+        """BUY makerAmount should be clamped at $1/share when slippage pushes price above $1."""
+        high_price_book = Book(
+            market_id=1,
+            update_timestamp_ms=0,
+            asks=[(0.97, 100.0)],
+            bids=[(0.96, 100.0)],
+        )
+
+        result = builder.get_market_order_amounts(
+            MarketHelperInput(
+                side=Side.BUY, quantity_wei=int(100e18), slippage_bps=500
+            ),  # 5% on 0.97 = 1.0185
+            high_price_book,
+        )
+
+        # makerAmount should be clamped to takerAmount (shares), i.e. $1/share
+        assert result.maker_amount == result.taker_amount
+
+    def test_sell_floors_taker_amount_at_zero(self, builder: OrderBuilder):
+        """SELL takerAmount should floor at 0 with extreme slippage."""
+        book = Book(
+            market_id=1,
+            update_timestamp_ms=0,
+            asks=[(0.50, 100.0)],
+            bids=[(0.49, 100.0)],
+        )
+
+        result = builder.get_market_order_amounts(
+            MarketHelperInput(side=Side.SELL, quantity_wei=int(100e18), slippage_bps=10_001),
+            book,
+        )
+
+        assert result.taker_amount == 0
+
+
+class TestSlippageDeepBook:
+    """Test slippage with multi-tier books where avg != worst tier."""
+
+    @pytest.fixture
+    def deep_book(self) -> Book:
+        """Book: avg BUY = 0.266, worst ask = 0.30; avg SELL ≈ 0.277, worst bid = 0.25."""
+        return Book(
+            market_id=1,
+            update_timestamp_ms=0,
+            asks=[
+                (0.25, 50.0),
+                (0.27, 30.0),
+                (0.30, 20.0),
+            ],
+            bids=[
+                (0.30, 50.0),
+                (0.27, 30.0),
+                (0.25, 20.0),
+            ],
+        )
+
+    def test_buy_slippage_applies_to_worst_tier(self, builder: OrderBuilder, deep_book: Book):
+        """Slippage buffer is applied to worst tier price (0.30)."""
+        without = builder.get_market_order_amounts(
+            MarketHelperInput(side=Side.BUY, quantity_wei=int(100e18)),
+            deep_book,
+        )
+        with_slippage = builder.get_market_order_amounts(
+            MarketHelperInput(side=Side.BUY, quantity_wei=int(100e18), slippage_bps=500),
+            deep_book,
+        )
+
+        expected = (without.maker_amount * 10_500) // 10_000
+        assert with_slippage.maker_amount == expected
+        assert with_slippage.last_price == int(0.30e18)
+
+    def test_sell_slippage_applies_to_worst_tier(self, builder: OrderBuilder, deep_book: Book):
+        """Slippage buffer is applied to worst tier price (0.25)."""
+        without = builder.get_market_order_amounts(
+            MarketHelperInput(side=Side.SELL, quantity_wei=int(100e18)),
+            deep_book,
+        )
+        with_slippage = builder.get_market_order_amounts(
+            MarketHelperInput(side=Side.SELL, quantity_wei=int(100e18), slippage_bps=500),
+            deep_book,
+        )
+
+        expected = (without.taker_amount * 9_500) // 10_000
+        assert with_slippage.taker_amount == expected
+        assert with_slippage.last_price == int(0.25e18)

@@ -242,6 +242,7 @@ class OrderBuilder:
                 price_per_share=price,
                 maker_amount=(price * qty) // self._precision,
                 taker_amount=qty,
+                slippage_bps=0,
             )
         else:  # SELL
             return OrderAmounts(
@@ -249,6 +250,7 @@ class OrderBuilder:
                 price_per_share=price,
                 maker_amount=qty,
                 taker_amount=(price * qty) // self._precision,
+                slippage_bps=0,
             )
 
     def _process_book(self, depths: list[DepthLevel], quantity_wei: int) -> ProcessedBookAmounts:
@@ -301,8 +303,22 @@ class OrderBuilder:
         if qty < int(1e16):
             raise InvalidQuantityError()
 
+        slippage_bps = data.slippage_bps
+
         if data.side == Side.BUY:
             processed = self._process_book(book.asks, qty)
+            base_maker_amount = (
+                processed.last_price_wei * processed.quantity_wei
+            ) // self._precision
+            # Clamp at $1/share (maker_amount <= taker_amount) to preserve on-chain fee computation
+            maker_amount = (
+                min(
+                    (base_maker_amount * (10_000 + slippage_bps)) // 10_000,
+                    processed.quantity_wei,
+                )
+                if slippage_bps > 0
+                else base_maker_amount
+            )
             return OrderAmounts(
                 last_price=processed.last_price_wei,
                 # price_wei now contains sum of (price * qty) without division,
@@ -310,11 +326,24 @@ class OrderBuilder:
                 price_per_share=processed.price_wei // processed.quantity_wei
                 if processed.quantity_wei > 0
                 else 0,
-                maker_amount=(processed.last_price_wei * processed.quantity_wei) // self._precision,
+                maker_amount=maker_amount,
                 taker_amount=processed.quantity_wei,
+                slippage_bps=slippage_bps,
             )
         else:  # SELL
             processed = self._process_book(book.bids, qty)
+            base_taker_amount = (
+                processed.last_price_wei * processed.quantity_wei
+            ) // self._precision
+            # Floor at 0 to prevent underflow with extreme slippage values
+            taker_amount = (
+                max(
+                    (base_taker_amount * (10_000 - slippage_bps)) // 10_000,
+                    0,
+                )
+                if slippage_bps > 0
+                else base_taker_amount
+            )
             return OrderAmounts(
                 last_price=processed.last_price_wei,
                 # price_wei now contains sum of (price * qty) without division,
@@ -323,7 +352,8 @@ class OrderBuilder:
                 if processed.quantity_wei > 0
                 else 0,
                 maker_amount=processed.quantity_wei,
-                taker_amount=(processed.last_price_wei * processed.quantity_wei) // self._precision,
+                taker_amount=taker_amount,
+                slippage_bps=slippage_bps,
             )
 
     def _get_market_order_amounts_by_value(
@@ -364,15 +394,18 @@ class OrderBuilder:
 
         rounded_shares = retain_significant_digits(number_of_shares, 5)
         amounts = self._get_market_order_amounts_by_quantity(
-            MarketHelperInput(side=Side.BUY, quantity_wei=rounded_shares),
+            MarketHelperInput(
+                side=Side.BUY, quantity_wei=rounded_shares, slippage_bps=data.slippage_bps
+            ),
             book,
         )
 
         return OrderAmounts(
             price_per_share=amounts.price_per_share,
-            maker_amount=(amounts.last_price * rounded_shares) // self._precision,
+            maker_amount=amounts.maker_amount,
             taker_amount=rounded_shares,
             last_price=amounts.last_price,
+            slippage_bps=amounts.slippage_bps,
         )
 
     def get_market_order_amounts(
