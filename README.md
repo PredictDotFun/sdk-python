@@ -156,43 +156,49 @@ amounts = builder.get_market_order_amounts(
 
 print(f"Maker Amount: {amounts.maker_amount}")
 print(f"Taker Amount: {amounts.taker_amount}")
+print(f"Amount: {amounts.amount}")
 print(f"Price Per Share: {amounts.price_per_share}")
 print(f"Slippage Applied: {amounts.slippage_bps} bps")
+print(f"Is Min Amount Out: {amounts.is_min_amount_out}")
 ```
 
 ### Slippage
 
 By default, no additional slippage is applied to the order maker/taker amounts. You can specify a slippage tolerance in basis points (1 bps = 0.01%) to adjust the amounts:
 
-- **BUY orders**: slippage increases the `maker_amount` (you're willing to pay more)
+- **BUY orders**: slippage deflates the `taker_amount` (minimum shares out), keeping the USD commitment minimal so users can spend their full wallet balance. Requires `is_min_amount_out=True`.
 - **SELL orders**: slippage decreases the `taker_amount` (you're willing to receive less)
 
 ```python
-# Market order with 1% slippage (100 bps)
+# BUY with slippage
 amounts = builder.get_market_order_amounts(
     MarketHelperInput(
         side=Side.BUY,
         quantity_wei=10000000000000000000,  # 10 shares
         slippage_bps=100,  # 1% slippage tolerance
+        is_min_amount_out=True,
     ),
     orderbook,
 )
 
-# The returned OrderAmounts includes the slippage that was applied
+print(f"Maker Amount (cost): {amounts.maker_amount}")
+print(f"Taker Amount (min shares out): {amounts.taker_amount}")
+print(f"Amount (actual shares): {amounts.amount}")
 print(f"Slippage: {amounts.slippage_bps} bps")  # 100
 
-# Value-based market order with slippage
+# Value-based BUY with slippage
 amounts = builder.get_market_order_amounts(
     MarketHelperValueInput(
         side=Side.BUY,
         value_wei=5000000000000000000,  # 5 USDT
         slippage_bps=50,  # 0.5% slippage tolerance
+        is_min_amount_out=True,
     ),
     orderbook,
 )
 ```
 
-**Note:** Slippage will only be applied if you provide the `slippageBps` value when submitting your order to the REST API.
+**Note:** You must forward `is_min_amount_out=True`, the `amount` field, and `slippageBps` in your REST API request body for slippage to be applied.
 
 ## Redeeming Positions
 
