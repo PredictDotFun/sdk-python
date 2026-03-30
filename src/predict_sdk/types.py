@@ -42,6 +42,10 @@ class MarketHelperInput:
     quantity_wei: int
     slippage_bps: int = 0
     """Slippage tolerance in basis points (1 bps = 0.01%). Defaults to 0."""
+    is_min_amount_out: bool = False
+    """When True, BUY slippage deflates takerAmount (minimum shares out) instead of
+    inflating makerAmount. Must be passed as is_min_amount_out=True in the REST API
+    request body. Defaults to False."""
 
 
 @dataclass
@@ -56,6 +60,10 @@ class MarketHelperValueInput:
     value_wei: int
     slippage_bps: int = 0
     """Slippage tolerance in basis points (1 bps = 0.01%). Defaults to 0."""
+    is_min_amount_out: bool = False
+    """When True, BUY slippage deflates takerAmount (minimum shares out) instead of
+    inflating makerAmount. Must be passed as is_min_amount_out=True in the REST API
+    request body. Defaults to False."""
 
 
 @dataclass
@@ -77,6 +85,10 @@ class OrderAmounts:
     taker_amount: int
     slippage_bps: int = 0
     """The slippage tolerance in basis points that was applied to the amounts. 0 if none."""
+    amount: int = 0
+    """The non-deflated share quantity. For BUY with is_min_amount_out and slippage, differs from taker_amount."""
+    is_min_amount_out: bool = False
+    """Whether the new slippage model was used. Must be forwarded in the REST API request."""
 
 
 @dataclass

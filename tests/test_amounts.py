@@ -424,6 +424,30 @@ class TestSlippage:
         assert with_slippage.price_per_share == without.price_per_share
         assert with_slippage.last_price == without.last_price
         assert with_slippage.slippage_bps == 500
+        assert with_slippage.is_min_amount_out is False
+
+    def test_buy_by_quantity_deflates_taker_amount_when_is_min_amount_out(
+        self, builder: OrderBuilder, slippage_book: Book
+    ):
+        """BUY with is_min_amount_out=True deflates takerAmount instead of inflating makerAmount."""
+        without = builder.get_market_order_amounts(
+            MarketHelperInput(side=Side.BUY, quantity_wei=int(100e18), is_min_amount_out=True),
+            slippage_book,
+        )
+        with_slippage = builder.get_market_order_amounts(
+            MarketHelperInput(
+                side=Side.BUY, quantity_wei=int(100e18), slippage_bps=500, is_min_amount_out=True
+            ),
+            slippage_book,
+        )
+
+        # makerAmount unchanged (expected cost)
+        assert with_slippage.maker_amount == without.maker_amount
+        # takerAmount = signedShares deflated by 5%
+        assert with_slippage.taker_amount == (without.taker_amount * 9_500) // 10_000
+        assert with_slippage.amount == without.amount  # non-deflated shares unchanged
+        assert with_slippage.is_min_amount_out is True
+        assert with_slippage.slippage_bps == 500
 
     def test_sell_by_quantity_deflates_taker_amount(
         self, builder: OrderBuilder, slippage_book: Book
@@ -459,6 +483,25 @@ class TestSlippage:
         expected_maker = (without.maker_amount * 10_500) // 10_000
         assert with_slippage.maker_amount == expected_maker
         assert with_slippage.taker_amount == without.taker_amount
+        assert with_slippage.slippage_bps == 500
+
+    def test_buy_by_value_deflates_taker_amount_when_is_min_amount_out(
+        self, builder: OrderBuilder, slippage_book: Book
+    ):
+        """BUY by value with is_min_amount_out=True deflates takerAmount."""
+        without = builder.get_market_order_amounts(
+            MarketHelperValueInput(side=Side.BUY, value_wei=int(10e18), is_min_amount_out=True),
+            slippage_book,
+        )
+        with_slippage = builder.get_market_order_amounts(
+            MarketHelperValueInput(
+                side=Side.BUY, value_wei=int(10e18), slippage_bps=500, is_min_amount_out=True
+            ),
+            slippage_book,
+        )
+
+        assert with_slippage.maker_amount == without.maker_amount
+        assert with_slippage.is_min_amount_out is True
         assert with_slippage.slippage_bps == 500
 
     def test_no_slippage_by_default(self, builder: OrderBuilder, slippage_book: Book):
@@ -576,3 +619,22 @@ class TestSlippageDeepBook:
         expected = (without.taker_amount * 9_500) // 10_000
         assert with_slippage.taker_amount == expected
         assert with_slippage.last_price == int(0.25e18)
+
+    def test_buy_is_min_amount_out_deep_book(self, builder: OrderBuilder, deep_book: Book):
+        """is_min_amount_out: makerAmount = expected cost, takerAmount = deflated signedShares."""
+        without = builder.get_market_order_amounts(
+            MarketHelperInput(side=Side.BUY, quantity_wei=int(100e18), is_min_amount_out=True),
+            deep_book,
+        )
+        with_slippage = builder.get_market_order_amounts(
+            MarketHelperInput(
+                side=Side.BUY, quantity_wei=int(100e18), slippage_bps=500, is_min_amount_out=True
+            ),
+            deep_book,
+        )
+
+        assert with_slippage.maker_amount == without.maker_amount
+        assert with_slippage.taker_amount == (without.taker_amount * 9_500) // 10_000
+        assert with_slippage.amount == int(100e18)  # actual shares
+        assert with_slippage.last_price == int(0.30e18)
+        assert with_slippage.is_min_amount_out is True
