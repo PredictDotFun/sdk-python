@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -669,3 +670,214 @@ class TestCancelOrders:
                     is_yield_bearing=False,
                 ),
             )
+
+
+class TestSetApprovals:
+    """Test approval orchestration (both tracks) and on-chain idempotency."""
+
+    @pytest.mark.asyncio
+    async def test_set_approvals_covers_both_tracks_by_default(
+        self, builder_with_signer: OrderBuilder
+    ):
+        """set_approvals() with no args must approve standard AND yield-bearing contracts."""
+        from predict_sdk.types import TransactionSuccess
+
+        builder = builder_with_signer
+        builder.set_ctf_exchange_approval_async = AsyncMock(  # type: ignore[method-assign]
+            return_value=TransactionSuccess(success=True)
+        )
+        builder.set_ctf_exchange_allowance_async = AsyncMock(  # type: ignore[method-assign]
+            return_value=TransactionSuccess(success=True)
+        )
+        builder.set_neg_risk_adapter_approval_async = AsyncMock(  # type: ignore[method-assign]
+            return_value=TransactionSuccess(success=True)
+        )
+
+        result = await builder.set_approvals_async()
+
+        assert result.success is True
+        assert len(result.transactions) == 10
+
+        approval_combos = {
+            (c.kwargs["is_neg_risk"], c.kwargs["is_yield_bearing"])
+            for c in builder.set_ctf_exchange_approval_async.call_args_list
+        }
+        allowance_combos = {
+            (c.kwargs["is_neg_risk"], c.kwargs["is_yield_bearing"])
+            for c in builder.set_ctf_exchange_allowance_async.call_args_list
+        }
+        adapter_tracks = {
+            c.kwargs["is_yield_bearing"]
+            for c in builder.set_neg_risk_adapter_approval_async.call_args_list
+        }
+
+        assert approval_combos == {(False, False), (True, False), (False, True), (True, True)}
+        assert allowance_combos == {(False, False), (True, False), (False, True), (True, True)}
+        assert adapter_tracks == {False, True}
+
+    @pytest.mark.asyncio
+    async def test_set_approvals_single_track(self, builder_with_signer: OrderBuilder):
+        """Passing is_yield_bearing limits the run to that one track (5 operations)."""
+        from predict_sdk.types import TransactionSuccess
+
+        builder = builder_with_signer
+        builder.set_ctf_exchange_approval_async = AsyncMock(  # type: ignore[method-assign]
+            return_value=TransactionSuccess(success=True)
+        )
+        builder.set_ctf_exchange_allowance_async = AsyncMock(  # type: ignore[method-assign]
+            return_value=TransactionSuccess(success=True)
+        )
+        builder.set_neg_risk_adapter_approval_async = AsyncMock(  # type: ignore[method-assign]
+            return_value=TransactionSuccess(success=True)
+        )
+
+        result = await builder.set_approvals_async(is_yield_bearing=True)
+
+        assert result.success is True
+        assert len(result.transactions) == 5
+        assert all(
+            c.kwargs["is_yield_bearing"] is True
+            for c in builder.set_ctf_exchange_approval_async.call_args_list
+        )
+        assert all(
+            c.kwargs["is_yield_bearing"] is True
+            for c in builder.set_ctf_exchange_allowance_async.call_args_list
+        )
+
+    @pytest.mark.asyncio
+    async def test_allowance_skipped_when_already_sufficient(
+        self, builder_with_signer: OrderBuilder
+    ):
+        """An existing allowance that covers the amount must not send a transaction."""
+        from predict_sdk.constants import MAX_UINT256
+        from predict_sdk.types import TransactionSuccess
+
+        builder = builder_with_signer
+        contracts = MagicMock()
+        contracts.usdt.functions.allowance.return_value.call.return_value = MAX_UINT256
+        builder._contracts = contracts
+        builder._handle_transaction_async = AsyncMock(  # type: ignore[method-assign]
+            return_value=TransactionSuccess(success=True)
+        )
+
+        result = await builder.set_ctf_exchange_allowance_async(
+            is_neg_risk=True, is_yield_bearing=True
+        )
+
+        assert result.success is True
+        builder._handle_transaction_async.assert_not_called()
+        contracts.usdt.functions.allowance.assert_called_once_with(
+            builder._signer.address,
+            builder._addresses.YIELD_BEARING_NEG_RISK_CTF_EXCHANGE,
+        )
+
+    @pytest.mark.asyncio
+    async def test_allowance_sent_when_missing(self, builder_with_signer: OrderBuilder):
+        """A zero allowance (the bug the integrator hit) must trigger an approve transaction."""
+        from predict_sdk.types import TransactionSuccess
+
+        builder = builder_with_signer
+        contracts = MagicMock()
+        contracts.usdt.functions.allowance.return_value.call.return_value = 0
+        builder._contracts = contracts
+        builder._handle_transaction_async = AsyncMock(  # type: ignore[method-assign]
+            return_value=TransactionSuccess(success=True)
+        )
+
+        result = await builder.set_ctf_exchange_allowance_async(
+            is_neg_risk=True, is_yield_bearing=True
+        )
+
+        assert result.success is True
+        builder._handle_transaction_async.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_approval_skipped_when_already_approved(self, builder_with_signer: OrderBuilder):
+        """An ERC-1155 operator already approved must not send a transaction."""
+        from predict_sdk.types import TransactionSuccess
+
+        builder = builder_with_signer
+        builder._contracts = MagicMock()
+        builder._handle_transaction_async = AsyncMock(  # type: ignore[method-assign]
+            return_value=TransactionSuccess(success=True)
+        )
+
+        ct = MagicMock()
+        ct.functions.isApprovedForAll.return_value.call.return_value = True
+
+        with patch("predict_sdk.order_builder.get_conditional_tokens_contract", return_value=ct):
+            result = await builder.set_ctf_exchange_approval_async(
+                is_neg_risk=False, is_yield_bearing=True
+            )
+
+        assert result.success is True
+        builder._handle_transaction_async.assert_not_called()
+        ct.functions.isApprovedForAll.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_approval_sent_when_not_approved(self, builder_with_signer: OrderBuilder):
+        """An ERC-1155 operator not yet approved must send a setApprovalForAll transaction."""
+        from predict_sdk.types import TransactionSuccess
+
+        builder = builder_with_signer
+        builder._contracts = MagicMock()
+        builder._handle_transaction_async = AsyncMock(  # type: ignore[method-assign]
+            return_value=TransactionSuccess(success=True)
+        )
+
+        ct = MagicMock()
+        ct.functions.isApprovedForAll.return_value.call.return_value = False
+
+        with patch("predict_sdk.order_builder.get_conditional_tokens_contract", return_value=ct):
+            result = await builder.set_ctf_exchange_approval_async(
+                is_neg_risk=False, is_yield_bearing=True
+            )
+
+        assert result.success is True
+        builder._handle_transaction_async.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_allowance_read_failure_falls_through_to_send(
+        self, builder_with_signer: OrderBuilder
+    ):
+        """A failed allowance read must not raise; it falls through to the send path."""
+        from predict_sdk.types import TransactionSuccess
+
+        builder = builder_with_signer
+        contracts = MagicMock()
+        contracts.usdt.functions.allowance.return_value.call.side_effect = Exception("rpc down")
+        builder._contracts = contracts
+        builder._handle_transaction_async = AsyncMock(  # type: ignore[method-assign]
+            return_value=TransactionSuccess(success=True)
+        )
+
+        result = await builder.set_ctf_exchange_allowance_async(
+            is_neg_risk=False, is_yield_bearing=False
+        )
+
+        assert result.success is True
+        builder._handle_transaction_async.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_approval_read_failure_falls_through_to_send(
+        self, builder_with_signer: OrderBuilder
+    ):
+        """A failed isApprovedForAll read must not raise; it falls through to the send path."""
+        from predict_sdk.types import TransactionSuccess
+
+        builder = builder_with_signer
+        builder._contracts = MagicMock()
+        builder._handle_transaction_async = AsyncMock(  # type: ignore[method-assign]
+            return_value=TransactionSuccess(success=True)
+        )
+
+        ct = MagicMock()
+        ct.functions.isApprovedForAll.return_value.call.side_effect = Exception("rpc down")
+
+        with patch("predict_sdk.order_builder.get_conditional_tokens_contract", return_value=ct):
+            result = await builder.set_ctf_exchange_approval_async(
+                is_neg_risk=False, is_yield_bearing=True
+            )
+
+        assert result.success is True
+        builder._handle_transaction_async.assert_called_once()

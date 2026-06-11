@@ -73,11 +73,14 @@ print(f"Signature: {signed_order.signature}")
 
 ## Setting Approvals
 
-Before trading, you need to set approvals for the exchange contracts:
+Before trading, you need to set approvals for the exchange contracts. A single
+`set_approvals()` call covers every market type (standard and yield-bearing). It is
+idempotent: approvals already in place are skipped, so re-running it only sends the
+transactions that are still missing.
 
 ```python
-# Set all approvals at once
-result = builder.set_approvals(is_yield_bearing=False)
+# Set approvals for ALL market types (standard + yield-bearing) in one call
+result = builder.set_approvals()
 
 if result.success:
     print("All approvals set successfully!")
@@ -86,6 +89,10 @@ else:
     for tx in result.transactions:
         if not tx.success:
             print(f"Failed: {tx.cause}")
+
+# Optional: limit the run to a single track
+builder.set_approvals(is_yield_bearing=False)  # standard markets only
+builder.set_approvals(is_yield_bearing=True)   # yield-bearing markets only
 
 # Or set individual approvals
 builder.set_ctf_exchange_approval(is_neg_risk=False, is_yield_bearing=False)
@@ -273,7 +280,7 @@ import asyncio
 
 async def main():
     balance = await builder.balance_of_async("USDT")
-    result = await builder.set_approvals_async(is_yield_bearing=False)
+    result = await builder.set_approvals_async()
 
 asyncio.run(main())
 ```

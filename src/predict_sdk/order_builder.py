@@ -876,6 +876,14 @@ class OrderBuilder:
 
     # --- Approval Methods ---
 
+    def _approval_owner_address(self) -> str:
+        """Return the account whose approvals and allowances are being managed."""
+        if self._predict_account:
+            return self._predict_account
+        if self._signer:
+            return self._signer.address
+        raise MissingSignerError()
+
     async def set_ctf_exchange_approval_async(
         self,
         *,
@@ -903,6 +911,16 @@ class OrderBuilder:
             is_neg_risk=is_neg_risk,
             is_yield_bearing=is_yield_bearing,
         )
+
+        # skip when the operator is already in the desired state (idempotent, saves gas).
+        # a read failure is non-fatal: fall through so the send path reports any error.
+        owner = self._approval_owner_address()
+        try:
+            is_approved = ct_contract.functions.isApprovedForAll(owner, exchange_address).call()
+        except Exception:
+            is_approved = None
+        if is_approved == approved:
+            return TransactionSuccess(success=True)
 
         if self._predict_account:
             encoded = ct_contract.encode_abi(
@@ -960,6 +978,16 @@ class OrderBuilder:
             is_yield_bearing=is_yield_bearing,
         )
 
+        # skip when the operator is already in the desired state (idempotent, saves gas).
+        # a read failure is non-fatal: fall through so the send path reports any error.
+        owner = self._approval_owner_address()
+        try:
+            is_approved = ct_contract.functions.isApprovedForAll(owner, adapter_address).call()
+        except Exception:
+            is_approved = None
+        if is_approved == approved:
+            return TransactionSuccess(success=True)
+
         if self._predict_account:
             encoded = ct_contract.encode_abi(
                 abi_element_identifier="setApprovalForAll",
@@ -1006,6 +1034,18 @@ class OrderBuilder:
 
         exchange_address = self._get_exchange_identifier(is_neg_risk, is_yield_bearing)
 
+        # skip when the existing allowance already covers the requested amount (idempotent).
+        # a read failure is non-fatal: fall through so the send path reports any error.
+        owner = self._approval_owner_address()
+        try:
+            current_allowance = self._contracts.usdt.functions.allowance(
+                owner, exchange_address
+            ).call()
+        except Exception:
+            current_allowance = None
+        if current_allowance is not None and current_allowance >= amount:
+            return TransactionSuccess(success=True)
+
         if self._predict_account:
             encoded = self._contracts.usdt.encode_abi(
                 abi_element_identifier="approve",
@@ -1043,50 +1083,52 @@ class OrderBuilder:
             )
         )
 
+    async def _set_track_approvals_async(self, is_yield_bearing: bool) -> list[TransactionResult]:
+        """Set the five approvals required for a single market track (standard or yield-bearing)."""
+        return [
+            # Standard CTF Exchange
+            await self.set_ctf_exchange_approval_async(
+                is_neg_risk=False, is_yield_bearing=is_yield_bearing
+            ),
+            await self.set_ctf_exchange_allowance_async(
+                is_neg_risk=False, is_yield_bearing=is_yield_bearing
+            ),
+            # NegRisk CTF Exchange
+            await self.set_ctf_exchange_approval_async(
+                is_neg_risk=True, is_yield_bearing=is_yield_bearing
+            ),
+            await self.set_ctf_exchange_allowance_async(
+                is_neg_risk=True, is_yield_bearing=is_yield_bearing
+            ),
+            # NegRisk Adapter
+            await self.set_neg_risk_adapter_approval_async(is_yield_bearing=is_yield_bearing),
+        ]
+
     async def set_approvals_async(
         self,
         *,
-        is_yield_bearing: bool = False,
+        is_yield_bearing: bool | None = None,
     ) -> SetApprovalsResult:
         """
         Set all necessary approvals for trading (async).
 
+        By default both the standard and yield-bearing contracts are approved, so the
+        account is ready to trade every market type from a single call. The operations
+        are idempotent: any approval already in place is detected on-chain and skipped,
+        so calling this more than once only sends the transactions that are missing.
+
         Args:
-            is_yield_bearing: Whether to set approvals for yield-bearing markets.
+            is_yield_bearing: ``None`` (default) approves both tracks. Pass ``True`` or
+                ``False`` to limit the run to the yield-bearing or standard track only.
 
         Returns:
-            SetApprovalsResult with success status and transaction results.
+            SetApprovalsResult with overall success status and the per-operation results.
         """
+        tracks: list[bool] = [False, True] if is_yield_bearing is None else [is_yield_bearing]
+
         results: list[TransactionResult] = []
-
-        # Standard CTF Exchange
-        results.append(
-            await self.set_ctf_exchange_approval_async(
-                is_neg_risk=False, is_yield_bearing=is_yield_bearing
-            )
-        )
-        results.append(
-            await self.set_ctf_exchange_allowance_async(
-                is_neg_risk=False, is_yield_bearing=is_yield_bearing
-            )
-        )
-
-        # NegRisk CTF Exchange
-        results.append(
-            await self.set_ctf_exchange_approval_async(
-                is_neg_risk=True, is_yield_bearing=is_yield_bearing
-            )
-        )
-        results.append(
-            await self.set_ctf_exchange_allowance_async(
-                is_neg_risk=True, is_yield_bearing=is_yield_bearing
-            )
-        )
-
-        # NegRisk Adapter
-        results.append(
-            await self.set_neg_risk_adapter_approval_async(is_yield_bearing=is_yield_bearing)
-        )
+        for track in tracks:
+            results.extend(await self._set_track_approvals_async(track))
 
         success = all(r.success for r in results)
         return SetApprovalsResult(success=success, transactions=results)
@@ -1094,9 +1136,9 @@ class OrderBuilder:
     def set_approvals(
         self,
         *,
-        is_yield_bearing: bool = False,
+        is_yield_bearing: bool | None = None,
     ) -> SetApprovalsResult:
-        """Set all necessary approvals for trading (sync)."""
+        """Set all necessary approvals for trading (sync). See ``set_approvals_async``."""
         return self._run_async(self.set_approvals_async(is_yield_bearing=is_yield_bearing))
 
     # --- Balance Methods ---
