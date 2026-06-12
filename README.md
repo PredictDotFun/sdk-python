@@ -99,6 +99,163 @@ builder.set_ctf_exchange_approval(is_neg_risk=False, is_yield_bearing=False)
 builder.set_ctf_exchange_allowance(is_neg_risk=False, is_yield_bearing=False)
 ```
 
+## Scoped Approvals (per-operation)
+
+`set_approvals()` sets every approval for every market type in a single call. For most apps the scoped-approvals API is the better fit, and is the recommended approach whenever you build an approval UI. It returns only the approvals a given operation needs, as a list of plain, self-describing steps you can render as a checklist, pre-check, run with live progress, and gate on user confirmation.
+
+The mental model is simple: **everything produces steps, and one runner runs steps.**
+
+1. Describe what the user is about to do with an `ApprovalScope` (`operation`, plus `is_neg_risk` / `is_yield_bearing`, and an optional `side` to narrow a `TRADE`).
+2. Turn it into an ordered list of `ApprovalStep`s with `get_approval_steps` (one operation) or `get_all_approval_steps` (everything). Both are pure (no signer, no network access), so you can render the checklist before the wallet is connected.
+3. Run the steps with `run_approvals`, or drive them yourself with `check_approvals` / `set_approval`.
+
+`is_neg_risk` and `is_yield_bearing` describe the market and can be fetched from the `GET /markets` (or `GET /categories`) endpoint.
+
+`get_approval_steps` returns the minimal, ordered set for the operation. The labels below are the SDK's default copy (they match the Predict web app). Operations that need no approval return an empty list.
+
+A `TRADE` scope covers both order directions by default. Pass `side=Side.BUY` for just the collateral allowance, or `side=Side.SELL` for just the ERC-1155 approval. `CONVERT` is neg-risk only and raises `InvalidApprovalOperationError` for a standard market.
+
+### The `ApprovalStep` shape
+
+Each step is a plain dataclass, safe to render and serialize:
+
+```python
+ApprovalStep(
+    id="ERC1155_APPROVAL:CTF_EXCHANGE",  # stable identifier: "{type}:{spender_key}"
+    type="ERC1155_APPROVAL",             # or "ERC20_ALLOWANCE"
+    spender="0x8BC0...B689",             # the contract being granted permission
+    token="0x22DA...d244",               # the token contract (conditional tokens for ERC-1155, USDT for ERC-20)
+    label="Approve Exchange",            # default copy
+    description="Allows you to interact with the exchange.",
+)
+```
+
+The `label`/`description` are sensible English defaults. For custom wording or i18n, key your own copy off the stable `id` and ignore them.
+
+### Build the steps
+
+You'll typically build the steps from the same signer-backed `OrderBuilder` you use to check and run them.
+
+```python
+from predict_sdk import OrderBuilder, ChainId, Side, ApprovalScope
+
+builder = OrderBuilder.make(ChainId.BNB_MAINNET, private_key)
+
+# For a single operation on a market:
+steps = builder.get_approval_steps(
+    ApprovalScope(
+        operation="TRADE",
+        is_neg_risk=True,
+        is_yield_bearing=False,
+        # side=Side.BUY,  # optional TRADE narrowing
+    )
+)
+
+# For onboarding, every approval across both market types (and, by default, both tracks):
+all_steps = builder.get_all_approval_steps()  # or is_yield_bearing=False to limit to one track
+```
+
+`get_approval_steps` and `get_all_approval_steps` don't touch the chain, so you _can_ also call them on a signer-less builder (`OrderBuilder.make(ChainId.BNB_MAINNET)`) to render the checklist before the wallet is connected. You'll need a signer for everything after (`check_approvals`, `set_approval`, `run_approvals`).
+
+### Run them with progress reporting
+
+`run_approvals(steps, ...)` runs the steps in order, deduplicating by `id` (so you can safely pass a union of scopes or a curated subset). Options:
+
+- `skip_satisfied` (default `True`): pre-check each step on-chain and skip the ones already in place.
+- `stop_on_error` (default `True`): stop after the first failed step.
+- `on_progress`: a callback invoked as each step transitions, receiving an `ApprovalProgress(step, status, transaction)`.
+
+```python
+builder = OrderBuilder.make(ChainId.BNB_MAINNET, private_key)
+
+steps = builder.get_approval_steps(
+    ApprovalScope(operation="TRADE", is_neg_risk=True, is_yield_bearing=False)
+)
+
+report = builder.run_approvals(
+    steps,
+    skip_satisfied=True,     # default
+    stop_on_error=True,      # default
+    on_progress=lambda p: update_ui(p.step.id, p.status),
+)
+```
+
+`on_progress` reports each step through this lifecycle:
+
+| Status       | Meaning                                                                     |
+| ------------ | --------------------------------------------------------------------------- |
+| `checking`   | reading on-chain whether it's already approved (only when `skip_satisfied`) |
+| `skipped`    | already in place, nothing sent                                              |
+| `submitting` | transaction sent, awaiting confirmation                                     |
+| `confirmed`  | the transaction succeeded                                                   |
+| `failed`     | the transaction reverted or failed                                          |
+
+The returned `ApprovalRunReport` has `success` and `steps`, where each entry is an `ApprovalStepResult(step, status, transaction)` with `status` one of `"skipped"`, `"confirmed"`, or `"failed"`:
+
+```python
+if not report.success:
+    failed = [s.step.id for s in report.steps if s.status == "failed"]
+    raise RuntimeError(f"Approvals failed: {failed}")
+
+# Async variant:
+# report = await builder.run_approvals_async(steps, on_progress=...)
+```
+
+### Render a live checklist (the typical UI flow)
+
+This is the flow behind an in-app "Approvals" modal: render the steps, mark the ones already done, then run the rest with live updates.
+
+```python
+builder = OrderBuilder.make(ChainId.BNB_MAINNET, private_key)
+
+# 1. Build the plan.
+steps = builder.get_approval_steps(
+    ApprovalScope(operation="TRADE", is_neg_risk=is_neg_risk, is_yield_bearing=is_yield_bearing)
+)
+
+# 2. Render the checklist, marking which are already satisfied.
+for check in builder.check_approvals(steps):
+    add_row(check.step.id, check.step.label, check.step.description,
+            "done" if check.satisfied else "pending")
+
+# 3. Run the remaining steps, updating each row as it progresses.
+report = builder.run_approvals(
+    steps,
+    on_progress=lambda p: set_row_status(p.step.id, p.status),
+)
+```
+
+For first-time onboarding, swap `get_approval_steps(scope)` for `get_all_approval_steps()` to approve everything the protocol could need in one pass. That is the per-step, progress-reportable equivalent of `set_approvals()` (and a slight superset, since it also includes the split allowances).
+
+### Or drive each step yourself
+
+For full control (e.g. gating each step on a user confirmation), use the per-step primitives.
+
+```python
+builder = OrderBuilder.make(ChainId.BNB_MAINNET, private_key)
+steps = builder.get_approval_steps(
+    ApprovalScope(operation="SPLIT", is_neg_risk=False, is_yield_bearing=False)
+)
+
+# Batched pre-check to mark which steps are already done.
+for check in builder.check_approvals(steps):
+    if check.satisfied:
+        continue  # already approved
+    # set_approval is a raw send: ERC-20 defaults to MAX_UINT256, ERC-1155 to approved=True.
+    # Pass approved=False to revoke, or amount=... to cap an allowance.
+    result = builder.set_approval(check.step)
+    if not result.success:
+        break  # you decide whether to continue
+```
+
+### Notes
+
+- **Compose freely.** Union step lists to cover several operations at once, e.g. to make a market both trade-ready and splittable: `run_approvals([*trade_steps, *split_steps])` (duplicates are removed automatically).
+- **Predict accounts** (smart wallets) are supported transparently: every step routes through `Kernel.execute` when a `predict_account` is configured.
+- **Signer requirements.** `get_approval_steps` and `get_all_approval_steps` are pure and need no signer. `check_approval` / `check_approvals`, `set_approval`, and `run_approvals` require one and raise `MissingSignerError` otherwise.
+- **Async.** Every contract-touching method has an `_async` variant (`run_approvals_async`, `check_approvals_async`, `set_approval_async`, ...). The step getters are sync (pure).
+- **`set_approvals()` still exists** for the fire-and-forget "approve everything" case where you don't need per-step control or reporting.
+
 ## Using Predict Accounts (Smart Wallets)
 
 ```python
@@ -314,10 +471,21 @@ OrderBuilder.make(
 
 #### Approval Methods
 
-- `set_approvals(*, is_yield_bearing: bool = False) -> SetApprovalsResult`
+- `set_approvals(*, is_yield_bearing: bool | None = None) -> SetApprovalsResult` (blanket; `None` approves both tracks)
 - `set_ctf_exchange_approval(*, is_neg_risk: bool, is_yield_bearing: bool, approved: bool = True) -> TransactionResult`
 - `set_neg_risk_adapter_approval(*, is_yield_bearing: bool, approved: bool = True) -> TransactionResult`
 - `set_ctf_exchange_allowance(*, is_neg_risk: bool, is_yield_bearing: bool, amount: int = MAX_UINT256) -> TransactionResult`
+
+#### Scoped Approvals
+
+Each contract-touching method also has an `_async` variant (`check_approvals_async`, `set_approval_async`, `run_approvals_async`, ...). The step getters are pure (sync, no signer).
+
+- `get_approval_steps(scope: ApprovalScope) -> list[ApprovalStep]`
+- `get_all_approval_steps(*, is_yield_bearing: bool | None = None) -> list[ApprovalStep]`
+- `check_approval(step: ApprovalStep) -> bool`
+- `check_approvals(steps: list[ApprovalStep]) -> list[ApprovalCheck]`
+- `set_approval(step: ApprovalStep, *, approved: bool = True, amount: int = MAX_UINT256) -> TransactionResult`
+- `run_approvals(steps: list[ApprovalStep], *, skip_satisfied: bool = True, stop_on_error: bool = True, on_progress: Callable[[ApprovalProgress], None] | None = None) -> ApprovalRunReport`
 
 #### Position Management
 
@@ -350,6 +518,13 @@ from predict_sdk import (
     SetApprovalsResult,
     CancelOrdersOptions,
     OrderBuilderOptions,
+    # Scoped approvals
+    ApprovalScope,        # operation + is_neg_risk + is_yield_bearing + side?
+    ApprovalStep,         # id, type, spender, token, label, description
+    ApprovalCheck,        # step + satisfied
+    ApprovalProgress,     # step + status + transaction (on_progress payload)
+    ApprovalStepResult,   # step + status + transaction (report entry)
+    ApprovalRunReport,    # success + steps
 )
 ```
 

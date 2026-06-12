@@ -82,3 +82,12 @@ class InvalidSignerError(PredictSDKError):
             "The signer must be the Privy wallet exported from your account's settings. "
             "See: https://predict.fun/account/settings"
         )
+
+
+class InvalidApprovalOperationError(PredictSDKError):
+    """Raised when an approval operation is invalid for the given market configuration."""
+
+    def __init__(self, message: str | None = None) -> None:
+        super().__init__(
+            message or "Invalid approval operation for the given market configuration."
+        )

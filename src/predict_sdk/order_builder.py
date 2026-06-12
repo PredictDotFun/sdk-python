@@ -31,14 +31,17 @@ from predict_sdk._internal.utils import (
 from predict_sdk.abis import KERNEL_ABI
 from predict_sdk.constants import (
     ADDRESSES_BY_CHAIN_ID,
+    APPROVAL_STEP_COPY,
     EIP712_DOMAIN,
     FIVE_MINUTES_SECONDS,
     KERNEL_DOMAIN_BY_CHAIN_ID,
+    MAX_INT256,
     MAX_UINT256,
     ORDER_STRUCTURE,
     PROTOCOL_NAME,
     PROTOCOL_VERSION,
     RPC_URLS_BY_CHAIN_ID,
+    SPENDER_ROLE_BY_KEY,
     ZERO_ADDRESS,
     ZERO_HASH,
     Addresses,
@@ -49,6 +52,7 @@ from predict_sdk.constants import (
 from predict_sdk.errors import (
     FailedOrderSignError,
     FailedTypedDataEncoderError,
+    InvalidApprovalOperationError,
     InvalidExpirationError,
     InvalidQuantityError,
     InvalidSignerError,
@@ -57,6 +61,14 @@ from predict_sdk.errors import (
 )
 from predict_sdk.logger import Logger
 from predict_sdk.types import (
+    ApprovalCheck,
+    ApprovalOperation,
+    ApprovalProgress,
+    ApprovalRunReport,
+    ApprovalScope,
+    ApprovalStep,
+    ApprovalStepResult,
+    ApprovalStepType,
     Book,
     BuildOrderInput,
     CancelOrdersOptions,
@@ -1140,6 +1152,363 @@ class OrderBuilder:
     ) -> SetApprovalsResult:
         """Set all necessary approvals for trading (sync). See ``set_approvals_async``."""
         return self._run_async(self.set_approvals_async(is_yield_bearing=is_yield_bearing))
+
+    # --- Scoped Approvals ---
+
+    def _exchange_key(self, is_neg_risk: bool, is_yield_bearing: bool) -> str:
+        """Return the Addresses key of the exchange for a market type."""
+        if is_neg_risk:
+            return (
+                "YIELD_BEARING_NEG_RISK_CTF_EXCHANGE"
+                if is_yield_bearing
+                else "NEG_RISK_CTF_EXCHANGE"
+            )
+        return "YIELD_BEARING_CTF_EXCHANGE" if is_yield_bearing else "CTF_EXCHANGE"
+
+    def _ctf_key(self, is_neg_risk: bool, is_yield_bearing: bool) -> str:
+        """Return the Addresses key of the conditional tokens contract for a market type."""
+        if is_yield_bearing:
+            return (
+                "YIELD_BEARING_NEG_RISK_CONDITIONAL_TOKENS"
+                if is_neg_risk
+                else "YIELD_BEARING_CONDITIONAL_TOKENS"
+            )
+        return "NEG_RISK_CONDITIONAL_TOKENS" if is_neg_risk else "CONDITIONAL_TOKENS"
+
+    def _adapter_key(self, is_yield_bearing: bool) -> str:
+        """Return the Addresses key of the neg risk adapter for a track."""
+        return "YIELD_BEARING_NEG_RISK_ADAPTER" if is_yield_bearing else "NEG_RISK_ADAPTER"
+
+    def _make_approval_step(
+        self,
+        step_type: ApprovalStepType,
+        spender_key: str,
+        token_key: str,
+    ) -> ApprovalStep:
+        """Build a self-describing ApprovalStep from a spender/token key pair."""
+        role = SPENDER_ROLE_BY_KEY.get(spender_key)
+        copy = APPROVAL_STEP_COPY.get(f"{role}:{step_type}") if role else None
+        return ApprovalStep(
+            id=f"{step_type}:{spender_key}",
+            type=step_type,
+            spender=getattr(self._addresses, spender_key),
+            token=getattr(self._addresses, token_key),
+            label=copy["label"] if copy else "",
+            description=copy["description"] if copy else "",
+        )
+
+    def get_approval_steps(self, scope: ApprovalScope) -> list[ApprovalStep]:
+        """
+        Return the minimal, ordered set of approvals required for an operation on a market type.
+
+        Pure: requires no signer and performs no network calls. Operations that need no approval
+        (e.g. a standard MERGE or REDEEM) return an empty list.
+
+        Args:
+            scope: The operation and market type to scope the approvals to.
+
+        Returns:
+            The ordered approval steps.
+
+        Raises:
+            InvalidApprovalOperationError: If CONVERT is requested for a non-neg-risk market.
+        """
+        exchange_key = self._exchange_key(scope.is_neg_risk, scope.is_yield_bearing)
+        ctf_key = self._ctf_key(scope.is_neg_risk, scope.is_yield_bearing)
+        adapter_key = self._adapter_key(scope.is_yield_bearing)
+
+        def erc1155(spender_key: str) -> ApprovalStep:
+            return self._make_approval_step("ERC1155_APPROVAL", spender_key, ctf_key)
+
+        def erc20(spender_key: str) -> ApprovalStep:
+            return self._make_approval_step("ERC20_ALLOWANCE", spender_key, "USDT")
+
+        op = scope.operation
+        if op == "TRADE":
+            steps: list[ApprovalStep] = []
+            include_sell = scope.side is None or scope.side == Side.SELL
+            include_buy = scope.side is None or scope.side == Side.BUY
+            if include_sell:
+                steps.append(erc1155(exchange_key))
+            # Neg risk matches route minting/merging through the adapter, which moves the
+            # user's conditional tokens, so the adapter must be approved regardless of side.
+            if scope.is_neg_risk:
+                steps.append(erc1155(adapter_key))
+            if include_buy:
+                steps.append(erc20(exchange_key))
+            return steps
+        if op == "SPLIT":
+            # splitPosition pulls USDT: from the adapter for neg risk, else from the CT contract.
+            return [erc20(adapter_key)] if scope.is_neg_risk else [erc20(ctf_key)]
+        if op == "MERGE":
+            # Neg risk merges burn the user's tokens via the adapter; standard merges burn directly.
+            return [erc1155(adapter_key)] if scope.is_neg_risk else []
+        if op == "REDEEM":
+            # Neg risk claims redeem via the adapter; standard redemptions burn the user's tokens.
+            return [erc1155(adapter_key)] if scope.is_neg_risk else []
+        if op == "CONVERT":
+            if not scope.is_neg_risk:
+                raise InvalidApprovalOperationError("CONVERT is only valid for neg-risk markets.")
+            return [erc1155(adapter_key)]
+        raise InvalidApprovalOperationError(f"Unknown approval operation: {op}")
+
+    def get_all_approval_steps(
+        self,
+        *,
+        is_yield_bearing: bool | None = None,
+    ) -> list[ApprovalStep]:
+        """
+        Return every approval the protocol could require, deduplicated by id.
+
+        Spans both market types (standard and neg risk) and, by default, both tracks (standard and
+        yield-bearing). This is the per-step, progress-reportable equivalent of set_approvals()
+        (and a slight superset, since it also includes the split allowances). Pure: needs no signer.
+
+        Args:
+            is_yield_bearing: Limit to a single track. When None (default), both tracks are included.
+
+        Returns:
+            The full, deduplicated list of approval steps.
+        """
+        tracks = [False, True] if is_yield_bearing is None else [is_yield_bearing]
+        seen: set[str] = set()
+        steps: list[ApprovalStep] = []
+
+        for yb in tracks:
+            for is_neg_risk in (False, True):
+                # CONVERT is neg-risk only; its single step is already covered by the others.
+                operations: list[ApprovalOperation] = (
+                    ["TRADE", "SPLIT", "MERGE", "REDEEM", "CONVERT"]
+                    if is_neg_risk
+                    else ["TRADE", "SPLIT", "MERGE", "REDEEM"]
+                )
+                for operation in operations:
+                    scope = ApprovalScope(
+                        operation=operation, is_neg_risk=is_neg_risk, is_yield_bearing=yb
+                    )
+                    for step in self.get_approval_steps(scope):
+                        if step.id not in seen:
+                            seen.add(step.id)
+                            steps.append(step)
+
+        return steps
+
+    def _resolve_token_contract(self, step: ApprovalStep) -> Contract:
+        """Resolve the web3 contract an approval step acts on (USDT or a CT contract)."""
+        if not self._contracts:
+            raise MissingSignerError()
+        if step.type == "ERC20_ALLOWANCE":
+            return self._contracts.usdt
+        target = Web3.to_checksum_address(step.token)
+        for ct in (
+            self._contracts.conditional_tokens,
+            self._contracts.neg_risk_conditional_tokens,
+            self._contracts.yield_bearing_conditional_tokens,
+            self._contracts.yield_bearing_neg_risk_conditional_tokens,
+        ):
+            if ct.address == target:
+                return ct
+        raise ValueError(f"Unknown approval token: {step.token}")
+
+    async def check_approval_async(self, step: ApprovalStep) -> bool:
+        """Check whether a single approval step is already satisfied on-chain (async)."""
+        if not self._contracts:
+            raise MissingSignerError()
+
+        owner = self._approval_owner_address()
+
+        if step.type == "ERC20_ALLOWANCE":
+            allowance: int = self._contracts.usdt.functions.allowance(owner, step.spender).call()
+            return allowance >= MAX_INT256
+
+        ct = self._resolve_token_contract(step)
+        approved: bool = ct.functions.isApprovedForAll(owner, step.spender).call()
+        return approved
+
+    def check_approval(self, step: ApprovalStep) -> bool:
+        """Check whether a single approval step is already satisfied on-chain (sync)."""
+        return self._run_async(self.check_approval_async(step))
+
+    async def check_approvals_async(self, steps: list[ApprovalStep]) -> list[ApprovalCheck]:
+        """
+        Check whether each approval step is already satisfied on-chain (async).
+
+        Note: unlike the TypeScript SDK, this issues the reads sequentially (no multicall).
+        """
+        results: list[ApprovalCheck] = []
+        for step in steps:
+            satisfied = await self.check_approval_async(step)
+            results.append(ApprovalCheck(step=step, satisfied=satisfied))
+        return results
+
+    def check_approvals(self, steps: list[ApprovalStep]) -> list[ApprovalCheck]:
+        """Check whether each approval step is already satisfied on-chain (sync)."""
+        return self._run_async(self.check_approvals_async(steps))
+
+    async def _set_erc1155_approval_async(
+        self, token_contract: Contract, spender: str, approved: bool
+    ) -> TransactionResult:
+        """Set ERC-1155 setApprovalForAll for an operator (EOA or Predict-account Kernel path)."""
+        if self._predict_account:
+            encoded = token_contract.encode_abi(
+                abi_element_identifier="setApprovalForAll",
+                args=[spender, approved],
+            )
+            calldata = self._encode_execution_calldata(token_contract.address, encoded, value=0)
+            assert self._web3 is not None
+            kernel_contract = make_contract(self._web3, self._predict_account, KERNEL_ABI)
+            return await self._handle_transaction_async(
+                kernel_contract, "execute", self._execution_mode, calldata
+            )
+        return await self._handle_transaction_async(
+            token_contract, "setApprovalForAll", spender, approved
+        )
+
+    async def _set_erc20_allowance_async(self, spender: str, amount: int) -> TransactionResult:
+        """Set ERC-20 (USDT) allowance for a spender (EOA or Predict-account Kernel path)."""
+        assert self._contracts is not None
+        usdt = self._contracts.usdt
+        if self._predict_account:
+            encoded = usdt.encode_abi(
+                abi_element_identifier="approve",
+                args=[spender, amount],
+            )
+            calldata = self._encode_execution_calldata(usdt.address, encoded, value=0)
+            assert self._web3 is not None
+            kernel_contract = make_contract(self._web3, self._predict_account, KERNEL_ABI)
+            return await self._handle_transaction_async(
+                kernel_contract, "execute", self._execution_mode, calldata
+            )
+        return await self._handle_transaction_async(usdt, "approve", spender, amount)
+
+    async def set_approval_async(
+        self,
+        step: ApprovalStep,
+        *,
+        approved: bool = True,
+        amount: int = MAX_UINT256,
+    ) -> TransactionResult:
+        """
+        Execute a single approval step on-chain (async). Raw send: does not pre-check.
+
+        Args:
+            step: The step to execute.
+            approved: ERC-1155: approve (default) or revoke (False). ERC-20: when False, revokes by
+                setting the allowance to 0 (ignoring ``amount``).
+            amount: ERC-20 only: the allowance to set when approving. Defaults to MAX_UINT256.
+
+        Returns:
+            The transaction result.
+        """
+        if not self._contracts:
+            raise MissingSignerError()
+
+        if step.type == "ERC1155_APPROVAL":
+            token_contract = self._resolve_token_contract(step)
+            return await self._set_erc1155_approval_async(token_contract, step.spender, approved)
+
+        # For ERC-20, ``approved=False`` revokes by setting the allowance to 0.
+        return await self._set_erc20_allowance_async(step.spender, amount if approved else 0)
+
+    def set_approval(
+        self,
+        step: ApprovalStep,
+        *,
+        approved: bool = True,
+        amount: int = MAX_UINT256,
+    ) -> TransactionResult:
+        """Execute a single approval step on-chain (sync)."""
+        return self._run_async(self.set_approval_async(step, approved=approved, amount=amount))
+
+    async def run_approvals_async(
+        self,
+        steps: list[ApprovalStep],
+        *,
+        skip_satisfied: bool = True,
+        stop_on_error: bool = True,
+        on_progress: Callable[[ApprovalProgress], None] | None = None,
+    ) -> ApprovalRunReport:
+        """
+        Run the given approval steps in order, reporting progress (async).
+
+        Duplicate steps (by id) are removed, so you can pass a union of scopes or a curated subset.
+        Produce the steps with get_approval_steps(scope) (one operation) or get_all_approval_steps()
+        (everything). By default each step is checked first and skipped if already satisfied, and the
+        run stops on the first failure. Use check_approval + set_approval directly when you need finer
+        control (e.g. gating each step on a user confirmation).
+
+        Args:
+            steps: The steps to run (e.g. from get_approval_steps / get_all_approval_steps).
+            skip_satisfied: When True (default), skip steps already in place.
+            stop_on_error: When True (default), stop after the first failure.
+            on_progress: Optional callback invoked as each step transitions.
+
+        Returns:
+            The per-step report and overall success.
+        """
+        # Dedupe by id (first occurrence wins) so unioned/curated step lists "just work".
+        seen: set[str] = set()
+        unique_steps: list[ApprovalStep] = []
+        for step in steps:
+            if step.id not in seen:
+                seen.add(step.id)
+                unique_steps.append(step)
+
+        results: list[ApprovalStepResult] = []
+        success = True
+
+        for step in unique_steps:
+            if skip_satisfied:
+                if on_progress:
+                    on_progress(ApprovalProgress(step=step, status="checking"))
+                # A pre-check read failure is non-fatal: fall through to the send path (matching
+                # the legacy approval helpers) rather than aborting the whole run.
+                try:
+                    already_satisfied = await self.check_approval_async(step)
+                except Exception:
+                    already_satisfied = False
+                if already_satisfied:
+                    if on_progress:
+                        on_progress(ApprovalProgress(step=step, status="skipped"))
+                    results.append(ApprovalStepResult(step=step, status="skipped"))
+                    continue
+
+            if on_progress:
+                on_progress(ApprovalProgress(step=step, status="submitting"))
+
+            transaction = await self.set_approval_async(step)
+            status: Literal["confirmed", "failed"] = (
+                "confirmed" if transaction.success else "failed"
+            )
+
+            if on_progress:
+                on_progress(ApprovalProgress(step=step, status=status, transaction=transaction))
+            results.append(ApprovalStepResult(step=step, status=status, transaction=transaction))
+
+            if not transaction.success:
+                success = False
+                if stop_on_error:
+                    break
+
+        return ApprovalRunReport(success=success, steps=results)
+
+    def run_approvals(
+        self,
+        steps: list[ApprovalStep],
+        *,
+        skip_satisfied: bool = True,
+        stop_on_error: bool = True,
+        on_progress: Callable[[ApprovalProgress], None] | None = None,
+    ) -> ApprovalRunReport:
+        """Run the given approval steps in order (sync). See run_approvals_async."""
+        return self._run_async(
+            self.run_approvals_async(
+                steps,
+                skip_satisfied=skip_satisfied,
+                stop_on_error=stop_on_error,
+                on_progress=on_progress,
+            )
+        )
 
     # --- Balance Methods ---
 

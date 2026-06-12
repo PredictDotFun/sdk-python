@@ -259,3 +259,93 @@ class OrderBuilderOptions:
     predict_account: Address | None = None
     generate_salt: Callable[[], str] | None = None
     log_level: LogLevel = "INFO"
+
+
+# Scoped Approvals
+
+ApprovalOperation = Literal["TRADE", "SPLIT", "MERGE", "REDEEM", "CONVERT"]
+"""The on-chain operation a consumer is about to perform."""
+
+ApprovalStepType = Literal["ERC1155_APPROVAL", "ERC20_ALLOWANCE"]
+"""The kind of approval an ApprovalStep represents."""
+
+ApprovalStatus = Literal["checking", "skipped", "submitting", "confirmed", "failed"]
+"""The lifecycle status of an approval step while it is being run."""
+
+
+@dataclass
+class ApprovalScope:
+    """
+    Describes what the consumer is about to do, so the SDK can derive the minimal
+    approvals required for it.
+
+    Attributes:
+        operation: The operation being performed.
+        is_neg_risk: Whether the market is a neg risk (multi-outcome) market.
+        is_yield_bearing: Whether the market is yield-bearing.
+        side: Optional narrowing for TRADE orders. When omitted, both directions are
+            covered. Side.BUY returns only the collateral allowance; Side.SELL only the
+            ERC-1155 approval.
+    """
+
+    operation: ApprovalOperation
+    is_neg_risk: bool
+    is_yield_bearing: bool
+    side: Side | None = None
+
+
+@dataclass
+class ApprovalStep:
+    """
+    A single, self-describing approval. Returned by get_approval_steps and consumed by
+    check_approval / set_approval. Plain data, safe to render and serialize.
+
+    Attributes:
+        id: Stable identifier in the form "{type}:{spender_address_key}". Use to map your own copy.
+        type: The kind of approval (ERC-1155 operator approval or ERC-20 allowance).
+        spender: The address being granted permission.
+        token: The token contract the approval is set on (a CT contract for ERC-1155, USDT for ERC-20).
+        label: Default, human-readable label (matches the web app). Override via id for i18n.
+        description: Default, human-readable description (matches the web app).
+    """
+
+    id: str
+    type: ApprovalStepType
+    spender: Address
+    token: Address
+    label: str
+    description: str
+
+
+@dataclass
+class ApprovalCheck:
+    """The result of checking whether a single approval step is already satisfied on-chain."""
+
+    step: ApprovalStep
+    satisfied: bool
+
+
+@dataclass
+class ApprovalProgress:
+    """Emitted by run_approvals via on_progress as each step transitions."""
+
+    step: ApprovalStep
+    status: ApprovalStatus
+    transaction: TransactionResult | None = None
+
+
+@dataclass
+class ApprovalStepResult:
+    """The outcome of a single step within an ApprovalRunReport."""
+
+    step: ApprovalStep
+    status: Literal["skipped", "confirmed", "failed"]
+    transaction: TransactionResult | None = None
+
+
+@dataclass
+class ApprovalRunReport:
+    """The report returned by run_approvals."""
+
+    success: bool
+    steps: list[ApprovalStepResult] = field(default_factory=list)

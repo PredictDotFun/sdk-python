@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import Final
+from typing import Final, Literal
 
 MAX_SALT: Final[int] = 2_147_483_648
 FIVE_MINUTES_SECONDS: Final[int] = 60 * 5
@@ -138,3 +138,59 @@ ZERO_HASH: Final[str] = "0x" + "0" * 64
 
 # Max values
 MAX_UINT256: Final[int] = 2**256 - 1
+MAX_INT256: Final[int] = 2**255 - 1
+
+
+# Scoped Approvals
+
+ApprovalStepRole = Literal[
+    "EXCHANGE", "NEG_RISK_EXCHANGE", "NEG_RISK_ADAPTER", "CONDITIONAL_TOKENS"
+]
+"""The yield-agnostic role a spender plays, used to look up default UI copy."""
+
+# Maps an Addresses spender key to its yield-agnostic role, so the standard and
+# yield-bearing variants share the same UI copy.
+SPENDER_ROLE_BY_KEY: Final[dict[str, ApprovalStepRole]] = {
+    "CTF_EXCHANGE": "EXCHANGE",
+    "YIELD_BEARING_CTF_EXCHANGE": "EXCHANGE",
+    "NEG_RISK_CTF_EXCHANGE": "NEG_RISK_EXCHANGE",
+    "YIELD_BEARING_NEG_RISK_CTF_EXCHANGE": "NEG_RISK_EXCHANGE",
+    "NEG_RISK_ADAPTER": "NEG_RISK_ADAPTER",
+    "YIELD_BEARING_NEG_RISK_ADAPTER": "NEG_RISK_ADAPTER",
+    "CONDITIONAL_TOKENS": "CONDITIONAL_TOKENS",
+    "YIELD_BEARING_CONDITIONAL_TOKENS": "CONDITIONAL_TOKENS",
+}
+
+# Default, human-readable copy for each approval step, keyed by "{role}:{type}".
+# Mirrors the wording shown in the Predict web app. Consumers can override this by
+# mapping off the step's stable id.
+APPROVAL_STEP_COPY: Final[dict[str, dict[str, str]]] = {
+    "EXCHANGE:ERC1155_APPROVAL": {
+        "label": "Approve Exchange",
+        "description": "Allows you to interact with the exchange.",
+    },
+    "EXCHANGE:ERC20_ALLOWANCE": {
+        "label": "Exchange Allowance",
+        "description": "Grants the exchange permission to use your collateral to trade.",
+    },
+    "NEG_RISK_EXCHANGE:ERC1155_APPROVAL": {
+        "label": "Approve Multi-Outcome",
+        "description": "Allows you to interact with multi-outcome markets.",
+    },
+    "NEG_RISK_ADAPTER:ERC1155_APPROVAL": {
+        "label": "Approve Multi-Outcome Adapter",
+        "description": "Allows the multi-outcome adapter to manage your tokens.",
+    },
+    "NEG_RISK_EXCHANGE:ERC20_ALLOWANCE": {
+        "label": "Multi-Outcome Allowance",
+        "description": "Grants the multi-outcome exchange permission to use your collateral.",
+    },
+    "CONDITIONAL_TOKENS:ERC20_ALLOWANCE": {
+        "label": "Split Allowance",
+        "description": "Grants permission to use your collateral to split positions.",
+    },
+    "NEG_RISK_ADAPTER:ERC20_ALLOWANCE": {
+        "label": "Multi-Outcome Split Allowance",
+        "description": "Grants the adapter permission to use your collateral to split positions.",
+    },
+}

@@ -21,15 +21,18 @@ from predict_sdk.abis import (
 )
 from predict_sdk.constants import (
     ADDRESSES_BY_CHAIN_ID,
+    APPROVAL_STEP_COPY,
     EIP712_DOMAIN,
     FIVE_MINUTES_SECONDS,
     KERNEL_DOMAIN_BY_CHAIN_ID,
+    MAX_INT256,
     MAX_SALT,
     MAX_UINT256,
     ORDER_STRUCTURE,
     PROTOCOL_NAME,
     PROTOCOL_VERSION,
     RPC_URLS_BY_CHAIN_ID,
+    SPENDER_ROLE_BY_KEY,
     ZERO_ADDRESS,
     ZERO_HASH,
     Addresses,
@@ -40,6 +43,7 @@ from predict_sdk.constants import (
 from predict_sdk.errors import (
     FailedOrderSignError,
     FailedTypedDataEncoderError,
+    InvalidApprovalOperationError,
     InvalidExpirationError,
     InvalidNegRiskConfig,
     InvalidQuantityError,
@@ -50,6 +54,15 @@ from predict_sdk.errors import (
 )
 from predict_sdk.order_builder import OrderBuilder
 from predict_sdk.types import (
+    ApprovalCheck,
+    ApprovalOperation,
+    ApprovalProgress,
+    ApprovalRunReport,
+    ApprovalScope,
+    ApprovalStatus,
+    ApprovalStep,
+    ApprovalStepResult,
+    ApprovalStepType,
     Book,
     BuildOrderInput,
     CancelOrdersOptions,
@@ -97,6 +110,18 @@ __all__ = [
     "OrderBuilderOptions",
     "Addresses",
     "LogLevel",
+    # Scoped approvals
+    "ApprovalOperation",
+    "ApprovalStepType",
+    "ApprovalStatus",
+    "ApprovalScope",
+    "ApprovalStep",
+    "ApprovalCheck",
+    "ApprovalProgress",
+    "ApprovalStepResult",
+    "ApprovalRunReport",
+    "SPENDER_ROLE_BY_KEY",
+    "APPROVAL_STEP_COPY",
     # Constants
     "ChainId",
     "Side",
@@ -108,6 +133,7 @@ __all__ = [
     "PROTOCOL_VERSION",
     "MAX_SALT",
     "MAX_UINT256",
+    "MAX_INT256",
     "FIVE_MINUTES_SECONDS",
     "EIP712_DOMAIN",
     "ORDER_STRUCTURE",
@@ -123,6 +149,7 @@ __all__ = [
     "InvalidNegRiskConfig",
     "MakerSignerMismatchError",
     "InvalidSignerError",
+    "InvalidApprovalOperationError",
     # ABIs
     "CTF_EXCHANGE_ABI",
     "NEG_RISK_CTF_EXCHANGE_ABI",
