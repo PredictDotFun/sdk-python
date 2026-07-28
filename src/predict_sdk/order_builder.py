@@ -1876,6 +1876,81 @@ class OrderBuilder:
             )
         )
 
+    # --- Convert Positions Methods ---
+
+    async def convert_positions_async(
+        self,
+        neg_risk_on_chain_id: str,
+        index_set: int,
+        amount: int,
+        *,
+        is_yield_bearing: bool,
+    ) -> TransactionResult:
+        """
+        Convert a set of NO positions in a NegRisk market (async).
+
+        Burns the given amount of each NO position in the index set and returns the same
+        amount of each complementary YES position, plus collateral (USDT) proportional to
+        the number of NO positions converted minus one. If the market has a fee, it is
+        taken from both the collateral and the YES tokens. Only NegRisk markets support
+        conversions.
+
+        Args:
+            neg_risk_on_chain_id: The category's on-chain NegRisk market ID (32-byte
+                hex), as returned by the API. This is not the numeric API id of a
+                market or category.
+            index_set: Bitmask of the NO positions to convert, where bit `n` is the
+                market's question at index `n`.
+            amount: The amount of each NO position to convert.
+            is_yield_bearing: Whether this is a yield-bearing market.
+
+        Returns:
+            TransactionResult indicating success or failure.
+        """
+        if not self._contracts:
+            raise MissingSignerError()
+
+        # Conversions only exist on NegRisk markets and always go through the adapter
+        adapter_contract = get_neg_risk_adapter_contract(
+            self._contracts,
+            is_yield_bearing=is_yield_bearing,
+        )
+
+        if self._predict_account:
+            encoded = adapter_contract.encode_abi(
+                abi_element_identifier="convertPositions",
+                args=[neg_risk_on_chain_id, index_set, amount],
+            )
+            calldata = self._encode_execution_calldata(adapter_contract.address, encoded, value=0)
+            assert self._web3 is not None
+            kernel_contract = make_contract(self._web3, self._predict_account, KERNEL_ABI)
+            return await self._handle_transaction_async(
+                kernel_contract, "execute", self._execution_mode, calldata
+            )
+        else:
+            return await self._handle_transaction_async(
+                adapter_contract,
+                "convertPositions",
+                neg_risk_on_chain_id,
+                index_set,
+                amount,
+            )
+
+    def convert_positions(
+        self,
+        neg_risk_on_chain_id: str,
+        index_set: int,
+        amount: int,
+        *,
+        is_yield_bearing: bool,
+    ) -> TransactionResult:
+        """Convert a set of NO positions in a NegRisk market (sync)."""
+        return self._run_async(
+            self.convert_positions_async(
+                neg_risk_on_chain_id, index_set, amount, is_yield_bearing=is_yield_bearing
+            )
+        )
+
     # --- Cancel Orders Methods ---
 
     async def cancel_orders_async(

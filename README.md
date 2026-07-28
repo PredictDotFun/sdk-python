@@ -407,6 +407,29 @@ result = builder.merge_positions(
 )
 ```
 
+## Converting Positions
+
+Convert NO positions in a NegRisk market into the complementary YES positions plus collateral (USDT). For each `amount` converted, the selected NO positions are burned and you receive `amount` of every other market's YES position, plus `amount * (number of NO positions - 1)` of collateral. If the market has a fee, it is taken from both the collateral and the YES tokens. Only NegRisk markets support conversions.
+
+The `neg_risk_on_chain_id` matches the `negRiskOnChainId` field returned by the `GET /categories` endpoint: the category's on-chain NegRisk market ID, a 32-byte hex string. Note that this is not the numeric `id` the API uses for markets and categories. The `index_set` is a bitmask that selects which NO positions to convert: for each one, set the bit at the market's `questionIndex` (also returned by the `GET /categories` and `GET /positions` endpoints).
+
+Conversions move your NO tokens through the NegRisk adapter, which must be approved as an operator first. See [Scoped Approvals (per-operation)](#scoped-approvals-per-operation) and use the `CONVERT` operation.
+
+```python
+# Set the bit at each market's questionIndex to select its NO position
+question_indexes = [0, 2]  # e.g. convert the NO positions of the first and third questions
+index_set = 0
+for index in question_indexes:
+    index_set |= 1 << index
+
+result = builder.convert_positions(
+    neg_risk_on_chain_id="0x...",  # 32-byte hex, not the numeric API id
+    index_set=index_set,
+    amount=1000000000000000000,  # Amount of each NO position to convert (in wei)
+    is_yield_bearing=False,
+)
+```
+
 ## Canceling Orders
 
 ```python
@@ -492,6 +515,7 @@ Each contract-touching method also has an `_async` variant (`check_approvals_asy
 - `balance_of(token: "USDT" = "USDT", address: str | None = None) -> int`
 - `redeem_positions(condition_id: str, index_set: 1 | 2, amount: int | None = None, *, is_neg_risk: bool, is_yield_bearing: bool) -> TransactionResult`
 - `merge_positions(condition_id: str, amount: int, *, is_neg_risk: bool, is_yield_bearing: bool) -> TransactionResult`
+- `convert_positions(neg_risk_on_chain_id: str, index_set: int, amount: int, *, is_yield_bearing: bool) -> TransactionResult`
 
 #### Order Cancellation
 

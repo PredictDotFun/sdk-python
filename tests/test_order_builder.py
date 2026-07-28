@@ -555,6 +555,30 @@ class TestSplitPositions:
             )
 
 
+class TestConvertPositions:
+    """Test position converting functionality."""
+
+    def test_convert_positions_without_signer_raises(self, builder: OrderBuilder):
+        """convert_positions without signer should raise MissingSignerError."""
+        with pytest.raises(MissingSignerError):
+            builder.convert_positions(
+                neg_risk_on_chain_id="0x" + "0" * 64,
+                index_set=0b011,
+                amount=1000000000000000000,
+                is_yield_bearing=False,
+            )
+
+    def test_convert_positions_yield_bearing_without_signer_raises(self, builder: OrderBuilder):
+        """convert_positions for yield-bearing without signer should raise MissingSignerError."""
+        with pytest.raises(MissingSignerError):
+            builder.convert_positions(
+                neg_risk_on_chain_id="0x" + "0" * 64,
+                index_set=0b011,
+                amount=1000000000000000000,
+                is_yield_bearing=True,
+            )
+
+
 class TestTypedDataCombinations:
     """Test EIP-712 typed data generation for all market type combinations."""
 
