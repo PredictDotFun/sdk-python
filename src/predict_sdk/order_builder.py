@@ -541,7 +541,7 @@ class OrderBuilder:
             raise MissingSignerError()
 
         return Order(
-            salt=str(data.salt or self._generate_salt()),
+            salt=str(data.salt if data.salt is not None else self._generate_salt()),
             maker=effective_maker,
             signer=effective_signer,
             taker=data.taker or ZERO_ADDRESS,
