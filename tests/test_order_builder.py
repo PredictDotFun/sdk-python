@@ -10,10 +10,13 @@ import pytest
 from predict_sdk import (
     BuildOrderInput,
     ChainId,
+    CancelOrdersOptions,
     InvalidExpirationError,
+    InvalidNegRiskConfig,
     InvalidQuantityError,
     LimitHelperInput,
     MissingSignerError,
+    Order,
     OrderBuilder,
     Side,
     SignatureType,
@@ -93,6 +96,22 @@ class TestBuildOrder:
         )
 
         assert order.salt == "123456789"
+
+    def test_build_order_preserves_zero_salt(self, builder_with_signer: OrderBuilder):
+        """Build order should preserve zero as an explicitly supplied salt."""
+        order = builder_with_signer.build_order(
+            "LIMIT",
+            BuildOrderInput(
+                side=Side.BUY,
+                token_id="12345",
+                maker_amount="1000000000000000000",
+                taker_amount="2000000000000000000",
+                fee_rate_bps=100,
+                salt=0,
+            ),
+        )
+
+        assert order.salt == "0"
 
     def test_build_order_with_expiration(self, builder_with_signer: OrderBuilder):
         """Build order with custom expiration."""
@@ -668,8 +687,6 @@ class TestCancelOrders:
 
     def test_cancel_orders_without_signer_raises(self, builder: OrderBuilder):
         """cancel_orders without signer should raise MissingSignerError."""
-        from predict_sdk import CancelOrdersOptions, Order
-
         # Create a mock order
         mock_order = Order(
             salt="123",
@@ -694,6 +711,39 @@ class TestCancelOrders:
                     is_yield_bearing=False,
                 ),
             )
+
+    @pytest.mark.asyncio
+    async def test_cancel_orders_rejects_invalid_token_ids_before_submission(
+        self, builder_with_signer: OrderBuilder
+    ):
+        """cancel_orders should validate token IDs before submitting a transaction."""
+        builder = builder_with_signer
+        builder._contracts = object()  # type: ignore[assignment]
+        builder.validate_token_ids_async = AsyncMock(return_value=False)  # type: ignore[method-assign]
+        order = Order(
+            salt="123",
+            maker="0x" + "0" * 40,
+            signer="0x" + "0" * 40,
+            taker="0x" + "0" * 40,
+            token_id="12345",
+            maker_amount="1000000000000000000",
+            taker_amount="2000000000000000000",
+            expiration="4102444800",
+            nonce="0",
+            fee_rate_bps="100",
+            side=Side.BUY,
+            signature_type=SignatureType.EOA,
+        )
+
+        with pytest.raises(InvalidNegRiskConfig):
+            await builder.cancel_orders_async(
+                [order],
+                CancelOrdersOptions(is_neg_risk=False, is_yield_bearing=False),
+            )
+
+        builder.validate_token_ids_async.assert_awaited_once_with(
+            [12345], is_neg_risk=False, is_yield_bearing=False
+        )
 
 
 class TestSetApprovals:
