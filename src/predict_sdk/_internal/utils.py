@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import random
+import secrets
 from decimal import ROUND_DOWN, Decimal
 from typing import Any
 
@@ -45,7 +45,7 @@ def generate_order_salt() -> str:
     Returns:
         A random numeric string value for the salt.
     """
-    return str(random.randint(0, MAX_SALT))
+    return str(secrets.randbelow(MAX_SALT + 1))
 
 
 def retain_significant_digits(num: int, significant_digits: int) -> int:

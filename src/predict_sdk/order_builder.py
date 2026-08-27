@@ -54,6 +54,7 @@ from predict_sdk.errors import (
     FailedTypedDataEncoderError,
     InvalidApprovalOperationError,
     InvalidExpirationError,
+    InvalidNegRiskConfig,
     InvalidQuantityError,
     InvalidSignerError,
     MakerSignerMismatchError,
@@ -541,7 +542,7 @@ class OrderBuilder:
             raise MissingSignerError()
 
         return Order(
-            salt=str(data.salt or self._generate_salt()),
+            salt=str(data.salt if data.salt is not None else self._generate_salt()),
             maker=effective_maker,
             signer=effective_signer,
             taker=data.taker or ZERO_ADDRESS,
@@ -1970,6 +1971,16 @@ class OrderBuilder:
         """
         if not self._contracts:
             raise MissingSignerError()
+
+        if options.with_validation:
+            token_ids = [int(order.token_id) for order in orders]
+            is_valid = await self.validate_token_ids_async(
+                token_ids,
+                is_neg_risk=options.is_neg_risk,
+                is_yield_bearing=options.is_yield_bearing,
+            )
+            if not is_valid:
+                raise InvalidNegRiskConfig()
 
         exchange_contract = get_exchange_contract(
             self._contracts,
