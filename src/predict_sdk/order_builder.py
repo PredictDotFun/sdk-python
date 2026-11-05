@@ -1366,7 +1366,8 @@ class OrderBuilder:
 
     async def _set_erc20_allowance_async(self, spender: str, amount: int) -> TransactionResult:
         """Set ERC-20 (USDT) allowance for a spender (EOA or Predict-account Kernel path)."""
-        assert self._contracts is not None
+        if self._contracts is None:
+            raise AssertionError
         usdt = self._contracts.usdt
         if self._predict_account:
             encoded = usdt.encode_abi(
@@ -2011,7 +2012,8 @@ class OrderBuilder:
                 value=0,
             )
 
-            assert self._web3 is not None
+            if self._web3 is None:
+                raise AssertionError
             kernel_contract = make_contract(self._web3, self._predict_account, KERNEL_ABI)
 
             return await self._handle_transaction_async(
