@@ -13,10 +13,8 @@ def _load_abi(filename: str) -> list[dict[str, Any]]:
     """Load an ABI from a JSON file."""
     base_dir = _ABI_DIR.resolve()
     target_path = (base_dir / filename).resolve()
-    try:
-        target_path.relative_to(base_dir)
-    except ValueError:
-        raise Exception("Invalid file path")
+    if not target_path.is_relative_to(base_dir):
+        raise ValueError("Invalid file path")
     with open(target_path) as f:
         return cast(list[dict[str, Any]], json.load(f))
 
