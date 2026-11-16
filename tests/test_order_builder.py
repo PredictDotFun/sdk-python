@@ -94,6 +94,22 @@ class TestBuildOrder:
 
         assert order.salt == "123456789"
 
+    def test_build_order_with_zero_salt(self, builder_with_signer: OrderBuilder):
+        """Preserve an explicitly provided zero salt."""
+        order = builder_with_signer.build_order(
+            "LIMIT",
+            BuildOrderInput(
+                side=Side.BUY,
+                token_id="12345",
+                maker_amount="1000000000000000000",
+                taker_amount="2000000000000000000",
+                fee_rate_bps=100,
+                salt=0,
+            ),
+        )
+
+        assert order.salt == "0"
+
     def test_build_order_with_expiration(self, builder_with_signer: OrderBuilder):
         """Build order with custom expiration."""
         future_date = datetime(2100, 1, 1, tzinfo=timezone.utc)
