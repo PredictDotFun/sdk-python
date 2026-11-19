@@ -1923,7 +1923,8 @@ class OrderBuilder:
                 args=[neg_risk_on_chain_id, index_set, amount],
             )
             calldata = self._encode_execution_calldata(adapter_contract.address, encoded, value=0)
-            assert self._web3 is not None
+            if self._web3 is None:
+                raise AssertionError
             kernel_contract = make_contract(self._web3, self._predict_account, KERNEL_ABI)
             return await self._handle_transaction_async(
                 kernel_contract, "execute", self._execution_mode, calldata
